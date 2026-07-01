@@ -1,4 +1,4 @@
-import { findDuplicate } from "./dedup.js";
+import { findDuplicate, isValidHttpUrl } from "./dedup.js";
 import { preliminaryFilter } from "./topics.js";
 
 function createReport(discovered) {
@@ -11,11 +11,14 @@ function createReport(discovered) {
       irrelevant: 0,
       openaiError: 0,
       missingContentOrLink: 0,
+      rejected_missing_url: 0,
+      rejected_invalid_url: 0,
       other: 0,
     },
     rejectedItems: [],
   };
 }
+
 function recordRejection(report, candidate, type, reason) {
   report.rejected += 1;
   report.rejectedBy[type] += 1;
@@ -28,7 +31,8 @@ function recordRejection(report, candidate, type, reason) {
   }
 }
 
-async function saveRejected(repository, material, status, reason, categories = []) {
+export async function saveRejected(repository, material, status, reason, categories = []) {
+  if (!isValidHttpUrl(material?.url)) return null;
   return repository.saveMaterial({
     ...material,
     content: material.content ?? "",
@@ -53,14 +57,18 @@ export function createEditorPipeline({
       const report = createReport(candidates.length);
 
       for (const candidate of candidates) {
+        if (!candidate?.url) {
+          recordRejection(report, candidate ?? {}, "rejected_missing_url", "Відсутнє посилання на матеріал");
+          continue;
+        }
+        if (!isValidHttpUrl(candidate.url)) {
+          recordRejection(report, candidate, "rejected_invalid_url", "Некоректне посилання на матеріал");
+          continue;
+        }
+
         const initialFilter = preliminaryFilter(candidate);
         if (!initialFilter.relevant) {
-          await saveRejected(
-            repository,
-            candidate,
-            "filtered_out",
-            initialFilter.reason,
-          );
+          await saveRejected(repository, candidate, "filtered_out", initialFilter.reason);
           recordRejection(report, candidate, "irrelevant", initialFilter.reason);
           continue;
         }
@@ -77,43 +85,24 @@ export function createEditorPipeline({
         }
 
         if (article.extractionStatus !== "ok") {
-          const reason =
-            article.extractionStatus === "unresolved_primary_source"
-              ? "Не вдалося визначити посилання на першоджерело"
-              : "Недостатньо тексту першоджерела";
-          await saveRejected(
-            repository,
-            article,
-            "filtered_out",
-            reason,
-            initialFilter.categories,
-          );
+          const reason = article.extractionStatus === "unresolved_primary_source"
+            ? "Не вдалося визначити посилання на першоджерело"
+            : "Недостатньо тексту першоджерела";
+          await saveRejected(repository, article, "filtered_out", reason, initialFilter.categories);
           recordRejection(report, article, "missingContentOrLink", reason);
           continue;
         }
 
         if (!article.sourceTrusted) {
           const reason = "Посилання не належить надійному джерелу";
-          await saveRejected(
-            repository,
-            article,
-            "rejected_source",
-            reason,
-            initialFilter.categories,
-          );
+          await saveRejected(repository, article, "rejected_source", reason, initialFilter.categories);
           recordRejection(report, article, "missingContentOrLink", reason);
           continue;
         }
 
         const duplicate = findDuplicate(article, existing);
         if (duplicate.duplicate) {
-          await saveRejected(
-            repository,
-            article,
-            "duplicate",
-            `Duplicate by ${duplicate.reason}`,
-            initialFilter.categories,
-          );
+          await saveRejected(repository, article, "duplicate", `Duplicate by ${duplicate.reason}`, initialFilter.categories);
           report.duplicates += 1;
           continue;
         }
@@ -125,13 +114,7 @@ export function createEditorPipeline({
         } catch (error) {
           const reason = `OpenAI error: ${error.message}`;
           logger.error(`OpenAI classification failed: ${article.url}`, error);
-          await saveRejected(
-            repository,
-            article,
-            "rejected_ai_error",
-            reason,
-            contentFilter.categories,
-          );
+          await saveRejected(repository, article, "rejected_ai_error", reason, contentFilter.categories);
           recordRejection(report, article, "openaiError", reason);
           existing.push(article);
           continue;
@@ -150,8 +133,7 @@ export function createEditorPipeline({
           report.queued += 1;
           await onQueued(saved);
         } else {
-          const reason = decision.rejectionReason || "AI визначив матеріал нерелевантним";
-          recordRejection(report, article, "irrelevant", reason);
+          recordRejection(report, article, "irrelevant", decision.rejectionReason || "AI визначив матеріал нерелевантним");
         }
       }
 
