@@ -1,85 +1,63 @@
 import * as cheerio from "cheerio";
-
 import { parseNewsFeed } from "./news.js";
 import { OFFICIAL_SOURCES, sourceForUrl } from "./sources.js";
 import { preliminaryFilter } from "./topics.js";
 
-const USER_AGENT =
-  "Mozilla/5.0 (compatible; WaterNewsEditor/0.2; +https://github.com/Yurii2276/water-news-telegram-bot)";
+const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.3; +https://github.com/Yurii2276/water-news-telegram-bot)";
 
 async function fetchText(url, fetchImpl, timeout = 15_000) {
   const response = await fetchImpl(url, {
-    headers: {
-      accept: "text/html,application/xhtml+xml,application/rss+xml",
-      "user-agent": USER_AGENT,
-    },
+    headers: { accept: "text/html,application/xhtml+xml,application/rss+xml,application/atom+xml", "user-agent": USER_AGENT },
     redirect: "follow",
     signal: AbortSignal.timeout(timeout),
   });
-  if (!response.ok) {
-    throw new Error(`${url} returned HTTP ${response.status}`);
-  }
+  if (!response.ok) throw new Error(`${url} returned HTTP ${response.status}`);
   return { text: await response.text(), finalUrl: response.url || url };
+}
+
+function feedCandidate(item, metadata, logger) {
+  const candidate = { ...item, url: item.url ?? item.link, ...metadata };
+  if (!candidate.url) {
+    logger.warn?.(`Source item has no URL: ${candidate.sourceName} — ${candidate.title || "(без заголовка)"}`);
+  }
+  return candidate;
 }
 
 export function discoverOfficialLinks(html, source, limit = 30) {
   const $ = cheerio.load(html);
   const candidates = [];
   const seen = new Set();
-
   $("a[href]").each((_, element) => {
     const title = $(element).text().replace(/\s+/g, " ").trim();
     if (title.length < 20) return;
-
     let url;
     try {
       url = new URL($(element).attr("href"), source.listingUrl).toString();
     } catch {
       return;
     }
-
     const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
-    const allowedHost = source.hosts.some(
-      (allowed) => host === allowed || host.endsWith(`.${allowed}`),
-    );
-    if (!allowedHost || seen.has(url)) return;
-    if (
-      source.articlePathPattern &&
-      !source.articlePathPattern.test(new URL(url).pathname)
-    ) {
-      return;
-    }
+    const allowed = source.hosts.some((value) => host === value || host.endsWith(`.${value}`));
+    if (!allowed || seen.has(url)) return;
+    if (source.articlePathPattern && !source.articlePathPattern.test(new URL(url).pathname)) return;
     if (!preliminaryFilter({ title }).relevant) return;
-
     seen.add(url);
-    candidates.push({
-      title,
-      url,
-      sourceId: source.id,
-      sourceName: source.name,
-      discoveryMethod: "official",
-    });
+    candidates.push({ title, url, sourceId: source.id, sourceName: source.name, discoveryMethod: "official" });
   });
-
   return candidates.slice(0, limit);
 }
 
 export function discoverSitemapLinks(xml, source, limit = 30) {
   const $ = cheerio.load(xml, { xmlMode: true });
   const items = [];
-
   $("url").each((_, element) => {
     const url = $(element).find("loc").first().text().trim();
     if (!url) return;
-    const pathname = new URL(url).pathname;
-    if (source.articlePathPattern && !source.articlePathPattern.test(pathname)) {
-      return;
-    }
-    const title = decodeURIComponent(pathname.split("/").filter(Boolean).at(-1) ?? "")
-      .replaceAll("-", " ")
-      .trim();
-    const filter = preliminaryFilter({ title });
-    if (!filter.relevant) return;
+    let pathname;
+    try { pathname = new URL(url).pathname; } catch { return; }
+    if (source.articlePathPattern && !source.articlePathPattern.test(pathname)) return;
+    const title = decodeURIComponent(pathname.split("/").filter(Boolean).at(-1) ?? "").replaceAll("-", " ").trim();
+    if (!preliminaryFilter({ title }).relevant) return;
     items.push({
       title,
       url,
@@ -89,32 +67,23 @@ export function discoverSitemapLinks(xml, source, limit = 30) {
       publishedAt: $(element).find("lastmod").first().text().trim() || null,
     });
   });
-
   return items.reverse().slice(0, limit);
 }
 
-export async function discoverAllSources({
-  googleNewsRssUrl,
-  limit = 20,
-  fetchImpl = fetch,
-  logger = console,
-}) {
+export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchImpl = fetch, logger = console }) {
   const candidates = [];
-
   for (const source of OFFICIAL_SOURCES) {
     try {
       if (source.feedUrl) {
         const { text } = await fetchText(source.feedUrl, fetchImpl);
-        candidates.push(
-          ...parseNewsFeed(text, limit)
-            .filter((item) => preliminaryFilter(item).relevant)
-            .map((item) => ({
-              ...item,
-              sourceId: source.id,
-              sourceName: source.name,
-              discoveryMethod: "official_rss",
-            })),
-        );
+        const items = parseNewsFeed(text, limit)
+          .filter((item) => preliminaryFilter(item).relevant)
+          .map((item) => feedCandidate(item, {
+            sourceId: source.id,
+            sourceName: source.name,
+            discoveryMethod: "official_rss",
+          }, logger));
+        candidates.push(...items);
       } else if (source.sitemapUrl) {
         const { text } = await fetchText(source.sitemapUrl, fetchImpl);
         candidates.push(...discoverSitemapLinks(text, source, limit));
@@ -126,48 +95,30 @@ export async function discoverAllSources({
       logger.error(`Source discovery failed: ${source.id}`, error);
     }
   }
-
   try {
     const { text } = await fetchText(googleNewsRssUrl, fetchImpl);
-    candidates.push(
-      ...parseNewsFeed(text, limit).map((item) => ({
-        ...item,
-        sourceId: "google_news",
-        sourceName: item.source || "Google News discovery",
-        discoveryMethod: "google_news",
-      })),
-    );
+    candidates.push(...parseNewsFeed(text, limit).map((item) => feedCandidate(item, {
+      sourceId: "google_news",
+      sourceName: item.source || "Google News discovery",
+      discoveryMethod: "google_news",
+    }, logger)));
   } catch (error) {
     logger.error("Google News discovery failed", error);
   }
-
   return candidates;
 }
 
 export async function extractArticle(candidate, { fetchImpl = fetch } = {}) {
   const { text: html, finalUrl } = await fetchText(candidate.url, fetchImpl);
   const source = sourceForUrl(finalUrl);
-
   if (candidate.discoveryMethod === "google_news" && !source) {
-    return {
-      ...candidate,
-      url: finalUrl,
-      content: "",
-      extractionStatus: "unresolved_primary_source",
-    };
+    return { ...candidate, url: finalUrl, content: "", extractionStatus: "unresolved_primary_source" };
   }
-
   const $ = cheerio.load(html);
   $("script,style,noscript,nav,footer,header,aside,form").remove();
-  const root = $("article").first().length
-    ? $("article").first()
-    : $("main").first().length
-      ? $("main").first()
-      : $("body");
+  const root = $("article").first().length ? $("article").first() : $("main").first().length ? $("main").first() : $("body");
   const content = root.text().replace(/\s+/g, " ").trim().slice(0, 20_000);
-  const title =
-    $("h1").first().text().replace(/\s+/g, " ").trim() || candidate.title;
-
+  const title = $("h1").first().text().replace(/\s+/g, " ").trim() || candidate.title;
   return {
     ...candidate,
     title,
