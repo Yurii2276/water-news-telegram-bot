@@ -1,0 +1,124 @@
+const DEFAULT_RSS_URL =
+  "https://news.google.com/rss/search?q=%D0%B2%D0%BE%D0%B4%D0%B0+OR+%D0%B2%D0%BE%D0%B4%D0%BE%D0%BF%D0%BE%D1%81%D1%82%D0%B0%D1%87%D0%B0%D0%BD%D0%BD%D1%8F&hl=uk&gl=UA&ceid=UA:uk";
+
+function positiveInteger(value, fallback, name) {
+  if (value === undefined || value === "") {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+
+  return parsed;
+}
+
+function integerInRange(value, fallback, name, minimum, maximum) {
+  if (value === undefined || value === "") return fallback;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error(`${name} must be between ${minimum} and ${maximum}`);
+  }
+  return parsed;
+}
+
+function booleanValue(value, fallback, name) {
+  if (value === undefined || value === "") return fallback;
+  if (value === "true") return true;
+  if (value === "false") return false;
+  throw new Error(`${name} must be true or false`);
+}
+
+export function loadEnvironmentFile() {
+  try {
+    process.loadEnvFile();
+  } catch (error) {
+    if (error?.code !== "ENOENT") {
+      throw error;
+    }
+  }
+}
+
+export function getConfig(env = process.env) {
+  const token = env.TELEGRAM_BOT_TOKEN?.trim();
+  if (!token) {
+    throw new Error(
+      "TELEGRAM_BOT_TOKEN is required. Copy .env.example to .env and add the token.",
+    );
+  }
+
+  const adminTelegramId = positiveInteger(
+    env.ADMIN_TELEGRAM_ID,
+    undefined,
+    "ADMIN_TELEGRAM_ID",
+  );
+  if (!adminTelegramId) {
+    throw new Error("ADMIN_TELEGRAM_ID is required");
+  }
+
+  const databaseUrl = env.DATABASE_URL?.trim();
+  if (!databaseUrl) {
+    throw new Error("DATABASE_URL is required");
+  }
+
+  const openAiApiKey = env.OPENAI_API_KEY?.trim();
+  if (!openAiApiKey) {
+    throw new Error("OPENAI_API_KEY is required");
+  }
+
+  const publishChatId = env.PUBLISH_CHAT_ID?.trim();
+  if (!publishChatId) {
+    throw new Error("PUBLISH_CHAT_ID is required for automatic publishing");
+  }
+
+  return {
+    token,
+    dryRun: booleanValue(env.DRY_RUN, true, "DRY_RUN"),
+    adminTelegramId,
+    publishChatId,
+    databaseUrl,
+    openAiApiKey,
+    openAiModel: env.OPENAI_MODEL?.trim() || "gpt-5.4-mini",
+    newsRssUrl: env.NEWS_RSS_URL?.trim() || DEFAULT_RSS_URL,
+    newsLimit: positiveInteger(env.NEWS_LIMIT, 20, "NEWS_LIMIT"),
+    pollingTimeoutSeconds: positiveInteger(
+      env.POLLING_TIMEOUT_SECONDS,
+      30,
+      "POLLING_TIMEOUT_SECONDS",
+    ),
+    dailyScanHourUtc: integerInRange(
+      env.DAILY_SCAN_HOUR_UTC,
+      5,
+      "DAILY_SCAN_HOUR_UTC",
+      0,
+      23,
+    ),
+    dailyReportHourUtc: integerInRange(
+      env.DAILY_REPORT_HOUR_UTC,
+      18,
+      "DAILY_REPORT_HOUR_UTC",
+      0,
+      23,
+    ),
+    maxDailyPublications: integerInRange(
+      env.MAX_DAILY_PUBLICATIONS,
+      10,
+      "MAX_DAILY_PUBLICATIONS",
+      1,
+      10,
+    ),
+    postIntervalMinutes: positiveInteger(
+      env.POST_INTERVAL_MINUTES,
+      15,
+      "POST_INTERVAL_MINUTES",
+    ),
+    publishMaxRetries: integerInRange(
+      env.PUBLISH_MAX_RETRIES,
+      3,
+      "PUBLISH_MAX_RETRIES",
+      1,
+      10,
+    ),
+  };
+}
