@@ -1,6 +1,43 @@
 import { findDuplicate } from "./dedup.js";
 import { preliminaryFilter } from "./topics.js";
 
+function createReport(discovered) {
+  return {
+    discovered,
+    queued: 0,
+    rejected: 0,
+    duplicates: 0,
+    rejectedBy: {
+      irrelevant: 0,
+      openaiError: 0,
+      missingContentOrLink: 0,
+      other: 0,
+    },
+    rejectedItems: [],
+  };
+}
+function recordRejection(report, candidate, type, reason) {
+  report.rejected += 1;
+  report.rejectedBy[type] += 1;
+  if (report.rejectedItems.length < 10) {
+    report.rejectedItems.push({
+      title: candidate.title || "(без заголовка)",
+      reason,
+      type,
+    });
+  }
+}
+
+async function saveRejected(repository, material, status, reason, categories = []) {
+  return repository.saveMaterial({
+    ...material,
+    content: material.content ?? "",
+    status,
+    statusReason: reason,
+    preliminaryCategories: categories,
+  });
+}
+
 export function createEditorPipeline({
   discover,
   extract,
@@ -13,78 +50,108 @@ export function createEditorPipeline({
     async scan() {
       const candidates = await discover();
       const existing = await repository.listForDedup();
-      const report = { discovered: candidates.length, queued: 0, rejected: 0, duplicates: 0 };
+      const report = createReport(candidates.length);
 
       for (const candidate of candidates) {
+        const initialFilter = preliminaryFilter(candidate);
+        if (!initialFilter.relevant) {
+          await saveRejected(
+            repository,
+            candidate,
+            "filtered_out",
+            initialFilter.reason,
+          );
+          recordRejection(report, candidate, "irrelevant", initialFilter.reason);
+          continue;
+        }
+
+        let article;
         try {
-          const initialFilter = preliminaryFilter(candidate);
-          if (!initialFilter.relevant) {
-            await repository.saveMaterial({
-              ...candidate,
-              content: "",
-              status: "filtered_out",
-              statusReason: initialFilter.reason,
-              preliminaryCategories: [],
-            });
-            report.rejected += 1;
-            continue;
-          }
-
-          const article = await extract(candidate);
-          if (article.extractionStatus !== "ok") {
-            await repository.saveMaterial({
-              ...article,
-              status: "filtered_out",
-              statusReason: article.extractionStatus,
-              preliminaryCategories: initialFilter.categories,
-            });
-            report.rejected += 1;
-            continue;
-          }
-
-          if (!article.sourceTrusted) {
-            await repository.saveMaterial({
-              ...article,
-              status: "rejected_source",
-              statusReason: "Source URL is not in the trusted-source registry",
-              preliminaryCategories: initialFilter.categories,
-            });
-            report.rejected += 1;
-            continue;
-          }
-
-          const duplicate = findDuplicate(article, existing);
-          if (duplicate.duplicate) {
-            await repository.saveMaterial({
-              ...article,
-              status: "duplicate",
-              statusReason: `Duplicate by ${duplicate.reason}`,
-              preliminaryCategories: initialFilter.categories,
-            });
-            report.duplicates += 1;
-            continue;
-          }
-
-          const contentFilter = preliminaryFilter(article);
-          const decision = await classify(article);
-          const saved = await repository.saveMaterial({
-            ...article,
-            status: decision.relevant ? "queued" : "rejected_ai",
-            statusReason: decision.rejectionReason || null,
-            preliminaryCategories: contentFilter.categories,
-            aiDecision: decision,
-          });
-          existing.push(article);
-
-          if (decision.relevant) {
-            report.queued += 1;
-            await onQueued(saved);
-          } else {
-            report.rejected += 1;
-          }
+          article = await extract(candidate);
         } catch (error) {
-          logger.error(`Candidate processing failed: ${candidate.url}`, error);
-          report.rejected += 1;
+          const reason = `Extraction error: ${error.message}`;
+          logger.error(`Article extraction failed: ${candidate.url}`, error);
+          await saveRejected(repository, candidate, "filtered_out", reason);
+          recordRejection(report, candidate, "missingContentOrLink", reason);
+          continue;
+        }
+
+        if (article.extractionStatus !== "ok") {
+          const reason =
+            article.extractionStatus === "unresolved_primary_source"
+              ? "Не вдалося визначити посилання на першоджерело"
+              : "Недостатньо тексту першоджерела";
+          await saveRejected(
+            repository,
+            article,
+            "filtered_out",
+            reason,
+            initialFilter.categories,
+          );
+          recordRejection(report, article, "missingContentOrLink", reason);
+          continue;
+        }
+
+        if (!article.sourceTrusted) {
+          const reason = "Посилання не належить надійному джерелу";
+          await saveRejected(
+            repository,
+            article,
+            "rejected_source",
+            reason,
+            initialFilter.categories,
+          );
+          recordRejection(report, article, "missingContentOrLink", reason);
+          continue;
+        }
+
+        const duplicate = findDuplicate(article, existing);
+        if (duplicate.duplicate) {
+          await saveRejected(
+            repository,
+            article,
+            "duplicate",
+            `Duplicate by ${duplicate.reason}`,
+            initialFilter.categories,
+          );
+          report.duplicates += 1;
+          continue;
+        }
+
+        const contentFilter = preliminaryFilter(article);
+        let decision;
+        try {
+          decision = await classify(article);
+        } catch (error) {
+          const reason = `OpenAI error: ${error.message}`;
+          logger.error(`OpenAI classification failed: ${article.url}`, error);
+          await saveRejected(
+            repository,
+            article,
+            "rejected_ai_error",
+            reason,
+            contentFilter.categories,
+          );
+          recordRejection(report, article, "openaiError", reason);
+          existing.push(article);
+          continue;
+        }
+
+        const saved = await repository.saveMaterial({
+          ...article,
+          status: decision.relevant ? "queued" : "rejected_ai",
+          statusReason: decision.rejectionReason || null,
+          preliminaryCategories: contentFilter.categories,
+          aiDecision: decision,
+        });
+        existing.push(article);
+
+        if (decision.relevant) {
+          report.queued += 1;
+          await onQueued(saved);
+        } else {
+          const reason = decision.rejectionReason || "AI визначив матеріал нерелевантним";
+          recordRejection(report, article, "irrelevant", reason);
         }
       }
 
