@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createUpdateHandler } from "../src/bot.js";
+import { createUpdateHandler, formatScanReport } from "../src/bot.js";
 
 test("/scan starts collection and auto-publisher", async () => {
   const sent = [];
@@ -44,5 +44,28 @@ test("non-admin commands are denied", async () => {
   });
 
   assert.match(sent[0][1], /лише адміну/);
+});
+
+test("scan report includes rejection diagnostics and first titles", () => {
+  const text = formatScanReport({
+    discovered: 41,
+    queued: 0,
+    duplicates: 0,
+    rejected: 41,
+    rejectedBy: {
+      irrelevant: 12,
+      openaiError: 9,
+      missingContentOrLink: 20,
+      other: 0,
+    },
+    rejectedItems: [
+      { title: "Матеріал <1>", reason: "OpenAI error: timeout" },
+    ],
+  });
+
+  assert.match(text, /Нерелевантність: 12/);
+  assert.match(text, /Помилки OpenAI: 9/);
+  assert.match(text, /Немає тексту\/посилання: 20/);
+  assert.match(text, /Матеріал &lt;1&gt;/);
 });
 
