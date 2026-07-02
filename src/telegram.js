@@ -15,6 +15,17 @@ function decisionOf(material) {
 export function formatPublication(material) {
   if (material.editor_text) return material.editor_text;
   const decision = decisionOf(material);
+  if (decision.titleKeywordFallback) {
+    const snippet = String(decision.summary ?? material.content ?? "").trim();
+    return [
+      `<b>${escapeHtml(material.title)}</b>`,
+      snippet ? `\n${escapeHtml(snippet)}` : "",
+      `\n<a href="${escapeHtml(material.url)}">Джерело: ${escapeHtml(material.source_name ?? material.sourceName)}</a>`,
+    ]
+      .filter(Boolean)
+      .join("\n")
+      .slice(0, 4096);
+  }
   const hashtags = (decision.hashtags ?? []).join(" ");
   return [
     `<b>${escapeHtml(material.title)}</b>`,

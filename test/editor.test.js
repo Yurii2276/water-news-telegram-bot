@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { discoverAllSources } from "../src/collector.js";
 import { createEditorPipeline, saveRejected } from "../src/editor.js";
+import { formatPublication } from "../src/telegram.js";
 
 function candidate(title, suffix) {
   return {
@@ -45,8 +46,74 @@ test("saveRejected skips database write without valid URL", async () => {
   assert.equal(writes, 0);
 });
 
+test("strong water-sector titles queue without extraction or OpenAI", async () => {
+  const items = [
+    candidate("Куб понад 100 гривень: хочуть підвищити тариф на воду", "tariff"),
+    candidate("Частина Одеси залишилася без води", "outage"),
+    candidate("Миколаївводоканал через зношені мережі втрачає 40% води", "losses"),
+    candidate("Обміління Дністра загрожує водопостачанню громади", "dniester"),
+  ];
+  items[0].summary = "Регулятор розглядає зміну тарифу.";
+  const saved = [];
+  let extracts = 0;
+  let classifications = 0;
+  const pipeline = createEditorPipeline({
+    discover: async () => items,
+    extract: async () => { extracts += 1; throw new Error("must not run"); },
+    classify: async () => { classifications += 1; throw new Error("must not run"); },
+    repository: {
+      listForDedup: async () => [],
+      saveMaterial: async (material) => { saved.push(material); return material; },
+    },
+  });
+
+  const report = await pipeline.scan();
+  assert.equal(report.queued, 4);
+  assert.equal(report.accepted_title_keyword_fallback, 4);
+  assert.equal(report.rejected, 0);
+  assert.equal(extracts, 0);
+  assert.equal(classifications, 0);
+  assert.ok(saved.every((material) => material.status === "queued"));
+  assert.ok(saved.every((material) => material.aiDecision.titleKeywordFallback));
+});
+
+test("pure hot-water-only title remains rejected", async () => {
+  const item = candidate("У місті тимчасово не буде гарячої води через ремонт тепломережі", "hot-water");
+  const saved = [];
+  const pipeline = createEditorPipeline({
+    discover: async () => [item],
+    extract: async () => { throw new Error("must not run"); },
+    classify: async () => { throw new Error("must not run"); },
+    repository: {
+      listForDedup: async () => [],
+      saveMaterial: async (material) => { saved.push(material); return material; },
+    },
+  });
+
+  const report = await pipeline.scan();
+  assert.equal(report.queued, 0);
+  assert.equal(report.accepted_title_keyword_fallback, 0);
+  assert.equal(report.rejectedBy.irrelevant, 1);
+  assert.equal(saved[0].status, "filtered_out");
+});
+
+test("fallback Telegram post uses title, source, URL and optional snippet", () => {
+  const text = formatPublication({
+    title: "Тарифи на воду змінилися",
+    url: "https://example.com/water",
+    sourceName: "Приклад джерела",
+    content: "Короткий доступний опис матеріалу.",
+    aiDecision: { titleKeywordFallback: true },
+  });
+  assert.match(text, /Тарифи на воду змінилися/);
+  assert.match(text, /Приклад джерела/);
+  assert.match(text, /https:\/\/example\.com\/water/);
+  assert.match(text, /Короткий доступний опис матеріалу/);
+  assert.doesNotMatch(text, /Чому це важливо/);
+});
+
 test("pipeline still journals OpenAI errors for valid articles", async () => {
-  const item = candidate("Питна вода для громади", "ai-error");
+  const item = candidate("Стан водопровідної мережі громади", "ai-error");
   const saved = [];
   const pipeline = createEditorPipeline({
     discover: async () => [item],
