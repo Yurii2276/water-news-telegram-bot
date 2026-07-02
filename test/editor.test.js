@@ -113,7 +113,7 @@ test("fallback Telegram post uses title, source, URL and optional snippet", () =
 });
 
 test("pipeline still journals OpenAI errors for valid articles", async () => {
-  const item = candidate("Питна вода для громади", "ai-error");
+  const item = candidate("Стан водопровідної мережі громади", "ai-error");
   const saved = [];
   const pipeline = createEditorPipeline({
     discover: async () => [item],
