@@ -80,6 +80,40 @@ const DIRECT_WATER_CONTEXT = [
   /pyt\w*[- ]vod/i,
 ];
 
+const STRONG_TITLE_KEYWORDS = [
+  ["водоканал", /водоканал/i],
+  ["водопостачання", /водопостач/i],
+  ["водовідведення", /водовідвед/i],
+  ["централізоване водопостачання", /централізован\p{L}*\s+водопостач/iu],
+  ["тариф на воду", /тариф\p{L}*\s+на\s+вод/iu],
+  ["тарифи на воду", /тариф(?:и|ів|ами)?\s+на\s+вод/iu],
+  ["вартість води", /вартіст\p{L}*\s+вод/iu],
+  ["без води", /без\s+води/iu],
+  ["питна вода", /питн\p{L}*\s+вод/iu],
+  ["питне водопостачання", /питн\p{L}*\s+водопостач/iu],
+  ["втрати води", /втрат\p{L}*\s+вод/iu],
+  ["зношені мережі", /зношен\p{L}*\s+мереж/iu],
+  ["каламутна вода", /каламутн\p{L}*\s+вод/iu],
+  ["обміління", /обмілін/i],
+  ["Дністер", /дністер/i],
+  ["НКРЕКП", /нкрекп/i],
+];
+
+const HOT_WATER_OR_HEATING = /гаряч\p{L}*\s+вод|опален|теплопостач/iu;
+const WATER_UTILITY_EXCEPTION = /водоканал|водопостач|водовідвед|питн\p{L}*\s+вод|тариф\p{L}*\s+на\s+вод|без\s+води|аварі\p{L}*\s+(?:на\s+)?(?:водопровод|мереж)|комунальн\p{L}*\s+послуг/iu;
+
+export function titleKeywordFallback(title) {
+  const normalizedTitle = String(title ?? "").replace(/\s+/g, " ").trim();
+  if (!normalizedTitle) return { accepted: false, keyword: null };
+  if (HOT_WATER_OR_HEATING.test(normalizedTitle) && !WATER_UTILITY_EXCEPTION.test(normalizedTitle)) {
+    return { accepted: false, keyword: null };
+  }
+  const match = STRONG_TITLE_KEYWORDS.find(([, pattern]) => pattern.test(normalizedTitle));
+  return match
+    ? { accepted: true, keyword: match[0] }
+    : { accepted: false, keyword: null };
+}
+
 function hasCategory(categories, category) {
   return categories.includes(category);
 }
