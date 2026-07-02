@@ -1,5 +1,5 @@
 import { findDuplicate, isValidHttpUrl } from "./dedup.js";
-import { preliminaryFilter } from "./topics.js";
+import { preliminaryFilter, titleKeywordFallback } from "./topics.js";
 
 function createReport(discovered) {
   return {
@@ -7,6 +7,7 @@ function createReport(discovered) {
     queued: 0,
     rejected: 0,
     duplicates: 0,
+    accepted_title_keyword_fallback: 0,
     rejectedBy: {
       irrelevant: 0,
       openaiError: 0,
@@ -29,6 +30,31 @@ function recordRejection(report, candidate, type, reason) {
       type,
     });
   }
+}
+
+function fallbackCategory(keyword) {
+  if (/тариф|вартість/i.test(keyword)) return "tariffs";
+  if (/водоканал|зношені мережі|втрати води/i.test(keyword)) return "utilities";
+  if (/водовідвед/i.test(keyword)) return "wastewater";
+  if (/питн|каламут/i.test(keyword)) return "drinking_water";
+  return "water_supply";
+}
+
+function fallbackDecision(candidate, keyword) {
+  const snippet = String(candidate.summary ?? candidate.snippet ?? "").trim();
+  return {
+    relevant: true,
+    relevanceScore: 90,
+    category: fallbackCategory(keyword),
+    importance: 60,
+    confidence: "high",
+    confidenceScore: 90,
+    summary: snippet,
+    whyImportant: "",
+    hashtags: ["#вода"],
+    titleKeywordFallback: true,
+    fallbackKeyword: keyword,
+  };
 }
 
 export async function saveRejected(repository, material, status, reason, categories = []) {
@@ -67,6 +93,32 @@ export function createEditorPipeline({
         }
 
         const initialFilter = preliminaryFilter(candidate);
+        const candidateDuplicate = findDuplicate(candidate, existing);
+        if (candidateDuplicate.duplicate) {
+          await saveRejected(repository, candidate, "duplicate", `Duplicate by ${candidateDuplicate.reason}`, initialFilter.categories);
+          report.duplicates += 1;
+          continue;
+        }
+
+        const fallback = titleKeywordFallback(candidate.title);
+        if (fallback.accepted) {
+          const decision = fallbackDecision(candidate, fallback.keyword);
+          const snippet = String(candidate.summary ?? candidate.snippet ?? "").trim();
+          const saved = await repository.saveMaterial({
+            ...candidate,
+            content: snippet,
+            status: "queued",
+            statusReason: `Accepted by title keyword fallback: ${fallback.keyword}`,
+            preliminaryCategories: initialFilter.categories,
+            aiDecision: decision,
+          });
+          existing.push(candidate);
+          report.queued += 1;
+          report.accepted_title_keyword_fallback += 1;
+          await onQueued(saved);
+          continue;
+        }
+
         if (!initialFilter.relevant) {
           await saveRejected(repository, candidate, "filtered_out", initialFilter.reason);
           recordRejection(report, candidate, "irrelevant", initialFilter.reason);
