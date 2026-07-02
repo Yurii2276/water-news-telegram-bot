@@ -15,6 +15,7 @@ export function formatScanReport(report) {
   const rejected = report.rejectedBy ?? {};
   const lines = [
     `Готово: знайдено ${report.discovered}, у черзі ${report.queued}, дублів ${report.duplicates}, відхилено ${report.rejected}.`,
+    `Прийнято за ключовими словами заголовка: ${report.accepted_title_keyword_fallback ?? 0}`,
     "",
     "<b>Причини відхилення</b>",
     `Нерелевантність: ${rejected.irrelevant ?? 0}`,
