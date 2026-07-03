@@ -99,6 +99,66 @@ test("daily limit prevents an eleventh publication", async () => {
   assert.equal(queueReads, 0);
 });
 
+test("valid unregistered HTTPS URL is publishable with warning", async () => {
+  const warnings = [];
+  const url = "https://regional-news.example/water/outage";
+  const result = await verifyPrimarySource(
+    { url },
+    {
+      fetchImpl: async () => ({ ok: true, status: 200, url }),
+      logger: { warn: (...args) => warnings.push(args) },
+    },
+  );
+
+  assert.equal(result.verified, true);
+  assert.equal(result.unregisteredSource, true);
+  assert.equal(result.url, url);
+  assert.equal(warnings.length, 1);
+  assert.equal(warnings[0][0], "Publishing unregistered but valid source URL");
+});
+
+test("invalid source URLs are rejected without fetching", async () => {
+  let fetches = 0;
+  for (const url of [undefined, "", "not a url", "javascript:alert(1)", "mailto:news@example.com"]) {
+    const result = await verifyPrimarySource(
+      { url },
+      { fetchImpl: async () => { fetches += 1; } },
+    );
+    assert.equal(result.verified, false);
+    assert.equal(result.reason, "Invalid source URL");
+  }
+  assert.equal(fetches, 0);
+});
+
+test("broken unregistered URL is rejected", async () => {
+  const result = await verifyPrimarySource(
+    { url: "https://regional-news.example/missing" },
+    {
+      fetchImpl: async () => ({
+        ok: false,
+        status: 404,
+        url: "https://regional-news.example/missing",
+      }),
+    },
+  );
+  assert.equal(result.verified, false);
+  assert.match(result.reason, /HTTP 404/);
+});
+
+test("registered source verification still accepts the same source", async () => {
+  const result = await verifyPrimarySource(
+    { url: "https://www.davr.gov.ua/news/test" },
+    {
+      fetchImpl: async () => ({
+        ok: true,
+        status: 200,
+        url: "https://www.davr.gov.ua/news/test",
+      }),
+    },
+  );
+  assert.equal(result.verified, true);
+});
+
 test("source verification rejects redirects outside trusted registry", async () => {
   const result = await verifyPrimarySource(
     { url: "https://www.davr.gov.ua/news/test" },
