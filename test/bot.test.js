@@ -29,20 +29,61 @@ test("/scan starts collection and auto-publisher", async () => {
   assert.match(sent.at(-1)[1], /у черзі 1/);
 });
 
-test("non-admin commands are denied", async () => {
+test("admin can requeue failed publications without immediately draining queue", async () => {
   const sent = [];
+  const requestedWindows = [];
+  let kicks = 0;
   const handleUpdate = createUpdateHandler({
     telegram: { sendMessage: async (...args) => sent.push(args) },
-    repository: {},
+    repository: {
+      retryFailedPublications: async (hours) => {
+        requestedWindows.push(hours);
+        return 3;
+      },
+    },
+    pipeline: {},
+    publisher: { kick: () => kicks++ },
+    adminTelegramId: 42,
+  });
+
+  await handleUpdate({
+    message: {
+      chat: { id: 42 },
+      from: { id: 42 },
+      text: "/retry_failed_publish",
+    },
+  });
+
+  assert.deepEqual(requestedWindows, [48]);
+  assert.equal(kicks, 0);
+  assert.equal(sent[0][1], "Повторно поставлено в чергу: 3");
+});
+
+test("non-admin cannot run /retry_failed_publish", async () => {
+  const sent = [];
+  let retries = 0;
+  const handleUpdate = createUpdateHandler({
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    repository: {
+      retryFailedPublications: async () => {
+        retries += 1;
+        return 1;
+      },
+    },
     pipeline: {},
     publisher: {},
     adminTelegramId: 42,
   });
 
   await handleUpdate({
-    message: { chat: { id: 10 }, from: { id: 10 }, text: "/queue" },
+    message: {
+      chat: { id: 10 },
+      from: { id: 10 },
+      text: "/retry_failed_publish",
+    },
   });
 
+  assert.equal(retries, 0);
   assert.match(sent[0][1], /лише адміну/);
 });
 
@@ -68,4 +109,3 @@ test("scan report includes rejection diagnostics and first titles", () => {
   assert.match(text, /Немає тексту\/посилання: 20/);
   assert.match(text, /Матеріал &lt;1&gt;/);
 });
-
