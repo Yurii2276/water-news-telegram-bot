@@ -1,3 +1,4 @@
+import { isValidHttpUrl } from "./dedup.js";
 import { sourceForUrl } from "./sources.js";
 import { formatPublication } from "./telegram.js";
 
@@ -6,28 +7,42 @@ const sleepDefault = (milliseconds) =>
 
 export async function verifyPrimarySource(
   material,
-  { fetchImpl = fetch } = {},
+  { fetchImpl = fetch, logger = console } = {},
 ) {
-  const expectedSource = sourceForUrl(material.url);
-  if (!expectedSource) {
-    return { verified: false, reason: "URL is outside the trusted-source registry" };
+  if (!isValidHttpUrl(material?.url)) {
+    return { verified: false, reason: "Invalid source URL" };
   }
 
+  const expectedSource = sourceForUrl(material.url);
   const response = await fetchImpl(material.url, {
     method: "GET",
     redirect: "follow",
     headers: { "user-agent": "WaterNewsEditor/0.3 source-verification" },
     signal: AbortSignal.timeout(15_000),
   });
-  const resolvedSource = sourceForUrl(response.url || material.url);
-  if (!response.ok || !resolvedSource || resolvedSource.id !== expectedSource.id) {
+  const resolvedUrl = response.url || material.url;
+
+  if (!response.ok || !isValidHttpUrl(resolvedUrl)) {
     return {
       verified: false,
       reason: `Source verification failed with HTTP ${response.status}`,
     };
   }
 
-  return { verified: true, url: response.url || material.url };
+  if (!expectedSource) {
+    logger.warn("Publishing unregistered but valid source URL", resolvedUrl);
+    return { verified: true, url: resolvedUrl, unregisteredSource: true };
+  }
+
+  const resolvedSource = sourceForUrl(resolvedUrl);
+  if (!resolvedSource || resolvedSource.id !== expectedSource.id) {
+    return {
+      verified: false,
+      reason: `Source verification failed with HTTP ${response.status}`,
+    };
+  }
+
+  return { verified: true, url: resolvedUrl };
 }
 
 export function createAutoPublisher({
