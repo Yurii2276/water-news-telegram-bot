@@ -3,6 +3,7 @@ import { escapeHtml, formatPublication } from "./telegram.js";
 const HELP_MESSAGE = [
   "<b>Команди редактора</b>",
   "/scan — запустити збір і автопублікацію",
+  "/retry_failed_publish — повторно поставити в чергу невдалі публікації за 48 годин",
   "/queue — показати чергу автопублікації",
   "/news — останні опубліковані матеріали",
 ].join("\n");
@@ -58,6 +59,11 @@ export function createUpdateHandler({ telegram, repository, pipeline, publisher,
         logger.error("Manual scan failed", error);
         await telegram.sendMessage(chatId, "Сканування завершилося помилкою.");
       }
+      return;
+    }
+    if (command === "/retry_failed_publish") {
+      const count = await repository.retryFailedPublications(48);
+      await telegram.sendMessage(chatId, `Повторно поставлено в чергу: ${count}`);
       return;
     }
     if (command === "/queue") {
