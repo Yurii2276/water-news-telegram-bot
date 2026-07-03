@@ -1,8 +1,20 @@
 import pg from "pg";
 
-import { contentHash, normalizeTitle, normalizeUrl } from "./dedup.js";
+import { contentHash, isValidHttpUrl, normalizeTitle, normalizeUrl } from "./dedup.js";
 
 const { Pool } = pg;
+const FAILED_PUBLICATION_STATUSES = new Set(["rejected_publish", "publish_failed"]);
+
+export function isRetryableFailedPublication(material, { now = new Date(), windowHours = 48 } = {}) {
+  if (!FAILED_PUBLICATION_STATUSES.has(material?.status)) return false;
+  if (!isValidHttpUrl(material.url)) return false;
+  if (material.ai_decision?.relevant !== true) return false;
+  if (material.published_at) return false;
+
+  const updatedAt = new Date(material.updated_at).getTime();
+  const ageMs = now.getTime() - updatedAt;
+  return Number.isFinite(updatedAt) && ageMs >= 0 && ageMs <= windowHours * 60 * 60 * 1000;
+}
 
 export function createDatabase(databaseUrl) {
   const pool = new Pool({
@@ -96,6 +108,33 @@ export function createDatabase(databaseUrl) {
         [limit],
       );
       return rows;
+    },
+
+    async retryFailedPublications(windowHours = 48) {
+      const { rows } = await pool.query(
+        `SELECT id, url, status, ai_decision, published_at, updated_at
+         FROM materials
+         WHERE status IN ('rejected_publish', 'publish_failed')
+           AND updated_at >= NOW() - ($1 * INTERVAL '1 hour')`,
+        [windowHours],
+      );
+      const ids = rows
+        .filter((material) => isRetryableFailedPublication(material, { windowHours }))
+        .map((material) => material.id);
+      if (ids.length === 0) return 0;
+
+      const result = await pool.query(
+        `UPDATE materials SET
+           status='queued',
+           status_reason='Requeued by admin after publication failure',
+           next_publish_at=NULL,
+           updated_at=NOW()
+         WHERE id = ANY($1::bigint[])
+           AND status IN ('rejected_publish', 'publish_failed')
+           AND published_at IS NULL`,
+        [ids],
+      );
+      return result.rowCount;
     },
 
     async countPublishedToday() {
