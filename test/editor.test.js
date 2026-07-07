@@ -108,8 +108,81 @@ test("fallback Telegram post uses title, source, URL and optional snippet", () =
   assert.match(text, /Тарифи на воду змінилися/);
   assert.match(text, /Приклад джерела/);
   assert.match(text, /https:\/\/example\.com\/water/);
-  assert.match(text, /Короткий доступний опис матеріалу/);
+  assert.match(text, /💧 <b>Новини сектору<\/b>/);
+  assert.match(text, /🔗 https:\/\/example\.com\/water/);
   assert.doesNotMatch(text, /Чому це важливо/);
+});
+
+test("professional sector titles are categorized and prioritized for daily monitoring", async () => {
+  const items = [
+    {
+      ...candidate("НКРЕКП схвалила тарифи на централізоване водопостачання для ліцензіатів", "nerc-tariff"),
+      sourceId: "nerc",
+      sourceCategory: "regulator",
+    },
+    {
+      ...candidate("Міністерство оголосило відновлення водної інфраструктури громад", "ministry-recovery"),
+      sourceId: "mindev",
+      sourceCategory: "government",
+    },
+    {
+      ...candidate("Верховна Рада розгляне законопроєкт щодо питної води", "rada-bill"),
+      sourceId: "rada",
+      sourceCategory: "parliament",
+    },
+    {
+      ...candidate("Асоціація водоканалів обговорила інвестиційна програма водоканалу", "association"),
+      sourceId: "auc",
+      sourceCategory: "association",
+    },
+    {
+      ...candidate("UNICEF запускає WASH донорський проєкт для водної інфраструктури", "wash"),
+      sourceId: "unicef_ukraine",
+      sourceCategory: "donor",
+    },
+    {
+      ...candidate("Global smart water leak detection technology cuts non-revenue water", "smart-water"),
+      sourceId: "google_news",
+      sourceCategory: "international_tech",
+    },
+    {
+      ...candidate("Частина міста залишилася без води через аварію", "local-outage"),
+      sourceId: "google_news",
+      sourceCategory: "general_news",
+    },
+    {
+      ...candidate("На одній вулиці кілька годин не буде води через плановий ремонт", "one-street"),
+      sourceId: "google_news",
+      sourceCategory: "general_news",
+    },
+  ];
+  const saved = [];
+  const pipeline = createEditorPipeline({
+    discover: async () => items,
+    extract: async () => { throw new Error("must not run"); },
+    classify: async () => { throw new Error("must not run"); },
+    repository: {
+      listForDedup: async () => [],
+      saveMaterial: async (material) => { saved.push(material); return material; },
+    },
+  });
+
+  const report = await pipeline.scan();
+
+  assert.equal(report.queued, items.length);
+  assert.equal(report.categories.regulator, 1);
+  assert.equal(report.categories.government, 1);
+  assert.equal(report.categories.parliament, 1);
+  assert.equal(report.categories.association, 1);
+  assert.equal(report.categories.donor, 1);
+  assert.equal(report.categories.international_tech, 1);
+  assert.equal(report.categories.local_media, 2);
+  assert.equal(report.priorities.high, 5);
+  assert.equal(report.priorities.medium, 2);
+  assert.equal(report.priorities.low, 1);
+  assert.equal(saved.find((material) => material.url.endsWith("nerc-tariff")).aiDecision.priorityLevel, "high");
+  assert.equal(saved.find((material) => material.url.endsWith("smart-water")).aiDecision.materialCategory, "international_tech");
+  assert.equal(saved.find((material) => material.url.endsWith("one-street")).aiDecision.priorityLevel, "low");
 });
 
 test("pipeline still journals OpenAI errors for valid articles", async () => {

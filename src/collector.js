@@ -4,6 +4,19 @@ import { OFFICIAL_SOURCES, sourceForUrl } from "./sources.js";
 import { preliminaryFilter } from "./topics.js";
 
 const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.3; +https://github.com/Yurii2276/water-news-telegram-bot)";
+const TARGETED_GOOGLE_NEWS_QUERIES = [
+  "water supply technology Ukraine",
+  "wastewater treatment technology Ukraine",
+  "smart water meters Ukraine",
+  "leak detection water networks Ukraine",
+  "non-revenue water Ukraine",
+  "digital water utility Ukraine",
+  "wastewater reuse Ukraine",
+  "desalination technology water utility",
+  "sludge treatment wastewater",
+  "energy efficiency in water utilities Ukraine",
+  "smart water infrastructure Ukraine",
+];
 
 async function fetchText(url, fetchImpl, timeout = 15_000) {
   const response = await fetchImpl(url, {
@@ -42,7 +55,7 @@ export function discoverOfficialLinks(html, source, limit = 30) {
     if (source.articlePathPattern && !source.articlePathPattern.test(new URL(url).pathname)) return;
     if (!preliminaryFilter({ title }).relevant) return;
     seen.add(url);
-    candidates.push({ title, url, sourceId: source.id, sourceName: source.name, discoveryMethod: "official" });
+    candidates.push({ title, url, sourceId: source.id, sourceName: source.name, sourceCategory: source.category, discoveryMethod: "official" });
   });
   return candidates.slice(0, limit);
 }
@@ -63,6 +76,7 @@ export function discoverSitemapLinks(xml, source, limit = 30) {
       url,
       sourceId: source.id,
       sourceName: source.name,
+      sourceCategory: source.category,
       discoveryMethod: "official_sitemap",
       publishedAt: $(element).find("lastmod").first().text().trim() || null,
     });
@@ -81,6 +95,7 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
           .map((item) => feedCandidate(item, {
             sourceId: source.id,
             sourceName: source.name,
+            sourceCategory: source.category,
             discoveryMethod: "official_rss",
           }, logger));
         candidates.push(...items);
@@ -100,10 +115,27 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
     candidates.push(...parseNewsFeed(text, limit).map((item) => feedCandidate(item, {
       sourceId: "google_news",
       sourceName: item.source || "Google News discovery",
+      sourceCategory: "general_news",
       discoveryMethod: "google_news",
     }, logger)));
   } catch (error) {
     logger.error("Google News discovery failed", error);
+  }
+  const base = new URL(googleNewsRssUrl);
+  for (const query of TARGETED_GOOGLE_NEWS_QUERIES) {
+    try {
+      const url = new URL(base);
+      url.searchParams.set("q", query);
+      const { text } = await fetchText(url.toString(), fetchImpl);
+      candidates.push(...parseNewsFeed(text, Math.max(3, Math.ceil(limit / 4))).map((item) => feedCandidate(item, {
+        sourceId: "google_news",
+        sourceName: item.source || "Google News targeted discovery",
+        sourceCategory: "international_tech",
+        discoveryMethod: "google_news_targeted",
+      }, logger)));
+    } catch (error) {
+      logger.error(`Google News targeted discovery failed: ${query}`, error);
+    }
   }
   return candidates;
 }
@@ -125,6 +157,7 @@ export async function extractArticle(candidate, { fetchImpl = fetch } = {}) {
     url: finalUrl,
     sourceId: source?.id ?? candidate.sourceId,
     sourceName: source?.name ?? candidate.sourceName,
+    sourceCategory: source?.category ?? candidate.sourceCategory,
     sourceTrusted: Boolean(source),
     content,
     extractionStatus: content.length >= 300 ? "ok" : "insufficient_content",
