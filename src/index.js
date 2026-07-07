@@ -10,6 +10,7 @@ import {
 } from "./publisher.js";
 import { scheduleDaily } from "./scheduler.js";
 import { createTelegramClient } from "./telegram.js";
+import { prepareMaterialDisplayTitle } from "./translation.js";
 
 loadEnvironmentFile();
 const config = getConfig();
@@ -28,6 +29,11 @@ const publisher = createAutoPublisher({
   intervalMs: config.postIntervalMinutes * 60 * 1000,
   maxRetries: config.publishMaxRetries,
   dryRun: config.dryRun,
+  prepareDisplayTitle: (material) =>
+    prepareMaterialDisplayTitle(material, {
+      apiKey: config.openAiApiKey,
+      model: config.openAiModel,
+    }),
 });
 
 const pipeline = createEditorPipeline({
@@ -52,6 +58,11 @@ const handleUpdate = createUpdateHandler({
   pipeline,
   publisher,
   adminTelegramId: config.adminTelegramId,
+  prepareDisplayTitle: (material) =>
+    prepareMaterialDisplayTitle(material, {
+      apiKey: config.openAiApiKey,
+      model: config.openAiModel,
+    }),
 });
 
 const controller = new AbortController();

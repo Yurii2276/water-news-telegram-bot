@@ -1,4 +1,5 @@
 import { escapeHtml, formatPublication } from "./telegram.js";
+import { titleForDisplay } from "./translation.js";
 
 const HELP_MESSAGE = [
   "<b>Команди редактора</b>",
@@ -101,6 +102,14 @@ export function formatScanReport(report) {
     `Некоректний URL: ${rejected.rejected_invalid_url ?? 0}`,
     `Інше: ${rejected.other ?? 0}`,
   ];
+  if (report.translated_titles !== undefined || report.translation_failed !== undefined) {
+    lines.push(
+      "",
+      "<b>Переклад заголовків</b>",
+      `Перекладено: ${report.translated_titles ?? 0}`,
+      `Помилок перекладу: ${report.translation_failed ?? 0}`,
+    );
+  }
   if (report.rejectedItems?.length) {
     lines.push("", "<b>Перші відхилені матеріали</b>");
     for (const [index, item] of report.rejectedItems.entries()) {
@@ -113,7 +122,7 @@ export function formatScanReport(report) {
 function formatDigestItem(material, index) {
   const decision = decisionOf(material);
   const score = decision.priorityLevel ? ` · ${decision.priorityLevel}` : "";
-  return `${index}. ${escapeHtml(material.title)} — ${escapeHtml(material.source_name ?? material.sourceName ?? "джерело")}${score}`;
+  return `${index}. ${escapeHtml(titleForDisplay(material))} — ${escapeHtml(material.source_name ?? material.sourceName ?? "джерело")}${score}`;
 }
 
 export function formatDailyDigest(materials) {
@@ -136,7 +145,23 @@ export function formatDailyDigest(materials) {
   return lines.join("\n").slice(0, 4096);
 }
 
-export function createUpdateHandler({ telegram, repository, pipeline, publisher, adminTelegramId, logger = console }) {
+async function prepareDigestMaterials(materials, prepareDisplayTitle) {
+  const prepared = [];
+  for (const material of materials) {
+    prepared.push(await prepareDisplayTitle(material));
+  }
+  return prepared;
+}
+
+export function createUpdateHandler({
+  telegram,
+  repository,
+  pipeline,
+  publisher,
+  adminTelegramId,
+  logger = console,
+  prepareDisplayTitle = async (material) => material,
+}) {
   return async function handleUpdate(update) {
     const message = update?.message;
     const chatId = message?.chat?.id;
@@ -177,7 +202,7 @@ export function createUpdateHandler({ telegram, repository, pipeline, publisher,
     }
     if (command === "/daily_digest") {
       const materials = await repository.getDailyDigestMaterials();
-      await telegram.sendMessage(chatId, formatDailyDigest(materials));
+      await telegram.sendMessage(chatId, formatDailyDigest(await prepareDigestMaterials(materials, prepareDisplayTitle)));
       return;
     }
     if (command === "/queue") {

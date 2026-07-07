@@ -1,3 +1,5 @@
+import { titleForDisplay } from "./translation.js";
+
 const API_BASE_URL = "https://api.telegram.org";
 
 export function escapeHtml(value) {
@@ -39,10 +41,11 @@ export function formatPublication(material) {
   const label = CATEGORY_LABELS_UK[category] ?? CATEGORY_LABELS_UK.general_news;
   const source = material.source_name ?? material.sourceName ?? "Джерело";
   const url = material.url ?? "";
+  const displayTitle = titleForDisplay(material);
   return [
     `💧 <b>${escapeHtml(label)}</b>`,
     "",
-    `<b>${escapeHtml(material.title)}</b>`,
+    `<b>${escapeHtml(displayTitle)}</b>`,
     "",
     `Джерело: ${escapeHtml(source)}`,
     `🔗 ${escapeHtml(url)}`,

@@ -26,7 +26,7 @@ test("/scan starts collection and auto-publisher", async () => {
   });
 
   assert.equal(kicks, 1);
-  assert.match(sent.at(-1)[1], /у черзі 1/);
+  assert.match(sent.at(-1)[1], /Сѓ С‡РµСЂР·С– 1/);
 });
 
 test("admin can requeue failed publications without immediately draining queue", async () => {
@@ -56,7 +56,7 @@ test("admin can requeue failed publications without immediately draining queue",
 
   assert.deepEqual(requestedWindows, [48]);
   assert.equal(kicks, 0);
-  assert.equal(sent[0][1], "Повторно поставлено в чергу: 3");
+  assert.equal(sent[0][1], "РџРѕРІС‚РѕСЂРЅРѕ РїРѕСЃС‚Р°РІР»РµРЅРѕ РІ С‡РµСЂРіСѓ: 3");
 });
 
 test("non-admin cannot run /retry_failed_publish", async () => {
@@ -84,7 +84,7 @@ test("non-admin cannot run /retry_failed_publish", async () => {
   });
 
   assert.equal(retries, 0);
-  assert.match(sent[0][1], /лише адміну/);
+  assert.match(sent[0][1], /Р»РёС€Рµ Р°РґРјС–РЅСѓ/);
 });
 
 test("scan report includes rejection diagnostics and first titles", () => {
@@ -100,14 +100,14 @@ test("scan report includes rejection diagnostics and first titles", () => {
       other: 0,
     },
     rejectedItems: [
-      { title: "Матеріал <1>", reason: "OpenAI error: timeout" },
+      { title: "РњР°С‚РµСЂС–Р°Р» <1>", reason: "OpenAI error: timeout" },
     ],
   });
 
-  assert.match(text, /Нерелевантність: 12/);
-  assert.match(text, /Помилки OpenAI: 9/);
-  assert.match(text, /Немає тексту\/посилання: 20/);
-  assert.match(text, /Матеріал &lt;1&gt;/);
+  assert.match(text, /РќРµСЂРµР»РµРІР°РЅС‚РЅС–СЃС‚СЊ: 12/);
+  assert.match(text, /РџРѕРјРёР»РєРё OpenAI: 9/);
+  assert.match(text, /РќРµРјР°С” С‚РµРєСЃС‚Сѓ\/РїРѕСЃРёР»Р°РЅРЅСЏ: 20/);
+  assert.match(text, /РњР°С‚РµСЂС–Р°Р» &lt;1&gt;/);
 });
 
 test("scan report includes category and priority counters", () => {
@@ -160,14 +160,14 @@ test("/publish_queue_now is admin-only and calls publisher drain", async () => {
   });
 
   assert.equal(drains, 1);
-  assert.equal(sent[0][1], "Публікація запущена. Опубліковано: 2. DRY_RUN: false. Ліміт: 10.");
+  assert.equal(sent[0][1], "РџСѓР±Р»С–РєР°С†С–СЏ Р·Р°РїСѓС‰РµРЅР°. РћРїСѓР±Р»С–РєРѕРІР°РЅРѕ: 2. DRY_RUN: false. Р›С–РјС–С‚: 10.");
 
   await handleUpdate({
     message: { chat: { id: 7 }, from: { id: 7 }, text: "/publish_queue_now" },
   });
 
   assert.equal(drains, 1);
-  assert.match(sent.at(-1)[1], /лише адміну/);
+  assert.match(sent.at(-1)[1], /Р»РёС€Рµ Р°РґРјС–РЅСѓ/);
 });
 
 test("/daily_digest is admin-only and returns grouped sections", async () => {
@@ -181,13 +181,13 @@ test("/daily_digest is admin-only and returns grouped sections", async () => {
         return [
           {
             id: 1,
-            title: "НКРЕКП затвердила тариф на воду",
-            source_name: "НКРЕКП",
+            title: "РќРљР Р•РљРџ Р·Р°С‚РІРµСЂРґРёР»Р° С‚Р°СЂРёС„ РЅР° РІРѕРґСѓ",
+            source_name: "РќРљР Р•РљРџ",
             ai_decision: { materialCategory: "regulator", category: "tariffs", priorityLevel: "high" },
           },
           {
             id: 2,
-            title: "UNICEF WASH проєкт для водної інфраструктури",
+            title: "UNICEF WASH РїСЂРѕС”РєС‚ РґР»СЏ РІРѕРґРЅРѕС— С–РЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂРё",
             source_name: "UNICEF",
             ai_decision: { materialCategory: "donor", category: "donors", priorityLevel: "high" },
           },
@@ -204,9 +204,9 @@ test("/daily_digest is admin-only and returns grouped sections", async () => {
   });
 
   assert.equal(reads, 1);
-  assert.match(sent[0][1], /Вода UA: підсумок доби/);
-  assert.match(sent[0][1], /Регулювання \/ НКРЕКП \/ законодавство/);
-  assert.match(sent[0][1], /Відновлення \/ донори/);
+  assert.match(sent[0][1], /Р’РѕРґР° UA: РїС–РґСЃСѓРјРѕРє РґРѕР±Рё/);
+  assert.match(sent[0][1], /Р РµРіСѓР»СЋРІР°РЅРЅСЏ \/ РќРљР Р•РљРџ \/ Р·Р°РєРѕРЅРѕРґР°РІСЃС‚РІРѕ/);
+  assert.match(sent[0][1], /Р’С–РґРЅРѕРІР»РµРЅРЅСЏ \/ РґРѕРЅРѕСЂРё/);
 
   await handleUpdate({
     message: { chat: { id: 7 }, from: { id: 7 }, text: "/daily_digest" },
@@ -214,8 +214,40 @@ test("/daily_digest is admin-only and returns grouped sections", async () => {
   assert.equal(reads, 1);
 });
 
+test("/daily_digest uses Ukrainian display titles", async () => {
+  const sent = [];
+  const handleUpdate = createUpdateHandler({
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    repository: {
+      getDailyDigestMaterials: async () => [
+        {
+          id: 1,
+          title: "Global smart water leak detection technology cuts non-revenue water",
+          source_name: "WaterWorld",
+          ai_decision: { materialCategory: "international_tech", category: "technology", priorityLevel: "medium" },
+        },
+      ],
+    },
+    pipeline: {},
+    publisher: {},
+    adminTelegramId: 42,
+    prepareDisplayTitle: async (material) => ({
+      ...material,
+      displayTitleUk: "РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё",
+    }),
+  });
+
+  await handleUpdate({
+    message: { chat: { id: 42 }, from: { id: 42 }, text: "/daily_digest" },
+  });
+
+  assert.match(sent[0][1], /РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё/);
+  assert.doesNotMatch(sent[0][1], /Global smart water leak detection/);
+  assert.match(sent[0][1], /WaterWorld/);
+});
+
 test("daily digest formatter emits empty section fallback", () => {
   const text = formatDailyDigest([]);
-  assert.match(text, /Немає важливих повідомлень/);
-  assert.match(text, /Технології та міжнародна практика/);
+  assert.match(text, /РќРµРјР°С” РІР°Р¶Р»РёРІРёС… РїРѕРІС–РґРѕРјР»РµРЅСЊ/);
+  assert.match(text, /РўРµС…РЅРѕР»РѕРіС–С— С‚Р° РјС–Р¶РЅР°СЂРѕРґРЅР° РїСЂР°РєС‚РёРєР°/);
 });

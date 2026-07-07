@@ -54,6 +54,7 @@ export function createAutoPublisher({
   maxRetries = 3,
   dryRun = true,
   verifySource = verifyPrimarySource,
+  prepareDisplayTitle = async (material) => material,
   sleep = sleepDefault,
   logger = console,
 }) {
@@ -74,7 +75,8 @@ export function createAutoPublisher({
           return "dry_run";
         }
 
-        await telegram.sendMessage(channelId, formatPublication(material));
+        const publicationMaterial = await prepareDisplayTitle(material);
+        await telegram.sendMessage(channelId, formatPublication(publicationMaterial));
         await repository.setStatus(material.id, "published", "Automatically published");
         return "published";
       } catch (error) {
