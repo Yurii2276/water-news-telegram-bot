@@ -16,6 +16,9 @@ function createReport(discovered) {
     rejected: 0,
     duplicates: 0,
     accepted_title_keyword_fallback: 0,
+    normative_act: 0,
+    google_news_resolved_url: 0,
+    google_news_unresolved_url: 0,
     categories: Object.fromEntries(SOURCE_CATEGORIES.map((category) => [category, 0])),
     priorities: Object.fromEntries(PRIORITY_LEVELS.map((priority) => [priority, 0])),
     rejectedBy: {
@@ -34,6 +37,9 @@ function recordAccepted(report, material, categories = []) {
   const profile = classifyMaterialProfile(material, categories);
   report.categories[profile.materialCategory] = (report.categories[profile.materialCategory] ?? 0) + 1;
   report.priorities[profile.priorityLevel] = (report.priorities[profile.priorityLevel] ?? 0) + 1;
+  if (profile.normativeAct || profile.normative_act) report.normative_act += 1;
+  if (material.googleNewsUrlResolved) report.google_news_resolved_url += 1;
+  if (material.googleNewsUrlUnresolved) report.google_news_unresolved_url += 1;
 }
 
 function recordRejection(report, candidate, type, reason) {

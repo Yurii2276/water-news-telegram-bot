@@ -1,4 +1,5 @@
 import { titleForDisplay } from "./translation.js";
+import { contextForDisplay } from "./context.js";
 
 const API_BASE_URL = "https://api.telegram.org";
 
@@ -8,6 +9,10 @@ export function escapeHtml(value) {
     .replaceAll("<", "&lt;")
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;");
+}
+
+export function escapeHtmlAttribute(value) {
+  return escapeHtml(value).replaceAll("'", "&#39;");
 }
 
 function decisionOf(material) {
@@ -42,13 +47,16 @@ export function formatPublication(material) {
   const source = material.source_name ?? material.sourceName ?? "Джерело";
   const url = material.url ?? "";
   const displayTitle = titleForDisplay(material);
+  const context = contextForDisplay(material);
   return [
     `💧 <b>${escapeHtml(label)}</b>`,
     "",
     `<b>${escapeHtml(displayTitle)}</b>`,
     "",
+    context ? escapeHtml(context) : null,
+    "",
     `Джерело: ${escapeHtml(source)}`,
-    `🔗 ${escapeHtml(url)}`,
+    url ? `🔗 <a href="${escapeHtmlAttribute(url)}">Читати джерело</a>` : null,
   ]
     .filter((line) => line !== undefined && line !== null)
     .join("\n")

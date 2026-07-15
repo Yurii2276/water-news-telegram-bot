@@ -104,6 +104,19 @@ export function createDatabase(databaseUrl) {
          WHERE status = 'queued'
            AND (next_publish_at IS NULL OR next_publish_at <= NOW())
          ORDER BY
+           CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
+           CASE COALESCE(ai_decision->>'materialCategory', ai_decision->>'sourceCategory')
+             WHEN 'regulator' THEN 1
+             WHEN 'government' THEN 2
+             WHEN 'parliament' THEN 3
+             WHEN 'association' THEN 4
+             WHEN 'donor' THEN 5
+             WHEN 'international_tech' THEN 6
+             WHEN 'vodokanal' THEN 7
+             WHEN 'general_news' THEN 8
+             WHEN 'local_media' THEN 9
+             ELSE 8
+           END,
            CASE ai_decision->>'priorityLevel'
              WHEN 'high' THEN 0
              WHEN 'medium' THEN 1
@@ -209,6 +222,19 @@ export function createDatabase(databaseUrl) {
          WHERE status IN ('published', 'queued', 'dry_run')
            AND updated_at >= NOW() - INTERVAL '24 hours'
          ORDER BY
+           CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
+           CASE COALESCE(ai_decision->>'materialCategory', ai_decision->>'sourceCategory')
+             WHEN 'regulator' THEN 1
+             WHEN 'government' THEN 2
+             WHEN 'parliament' THEN 3
+             WHEN 'association' THEN 4
+             WHEN 'donor' THEN 5
+             WHEN 'international_tech' THEN 6
+             WHEN 'vodokanal' THEN 7
+             WHEN 'general_news' THEN 8
+             WHEN 'local_media' THEN 9
+             ELSE 8
+           END,
            CASE ai_decision->>'priorityLevel'
              WHEN 'high' THEN 0
              WHEN 'medium' THEN 1

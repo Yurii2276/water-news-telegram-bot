@@ -37,6 +37,11 @@ const CATEGORY_LABELS = {
 
 const DIGEST_SECTIONS = [
   {
+    title: "Нормативка / регулювання",
+    matches: (decision) =>
+      decision.normativeAct === true || decision.normative_act === true,
+  },
+  {
     title: "Регулювання / НКРЕКП / законодавство",
     matches: (decision) =>
       ["regulator", "parliament"].includes(decision.materialCategory ?? decision.sourceCategory) ||
@@ -78,6 +83,25 @@ function decisionOf(material) {
   return material.ai_decision ?? material.aiDecision ?? {};
 }
 
+function priorityValue(material) {
+  const decision = decisionOf(material);
+  if (decision.normativeAct === true || decision.normative_act === true) return 0;
+  const category = decision.materialCategory ?? decision.sourceCategory ?? material.sourceCategory ?? material.source_category ?? "general_news";
+  const categoryOrder = {
+    regulator: 1,
+    government: 2,
+    parliament: 3,
+    association: 4,
+    donor: 5,
+    international_tech: 6,
+    vodokanal: 7,
+    general_news: 8,
+    local_media: 9,
+  };
+  const priorityOrder = { high: 0, medium: 1, low: 2 };
+  return (categoryOrder[category] ?? 8) * 10 + (priorityOrder[decision.priorityLevel] ?? 1);
+}
+
 export function formatScanReport(report) {
   const rejected = report.rejectedBy ?? {};
   const categories = report.categories ?? {};
@@ -93,6 +117,9 @@ export function formatScanReport(report) {
     `High priority: ${priorities.high ?? 0}`,
     `Medium priority: ${priorities.medium ?? 0}`,
     `Low priority: ${priorities.low ?? 0}`,
+    `Нормативні/регуляторні матеріали: ${report.normative_act ?? 0}`,
+    `Google News URL розкрито: ${report.google_news_resolved_url ?? 0}`,
+    `Google News URL не розкрито: ${report.google_news_unresolved_url ?? 0}`,
     "",
     "<b>Причини відхилення</b>",
     `Нерелевантність: ${rejected.irrelevant ?? 0}`,
@@ -126,12 +153,28 @@ function formatDigestItem(material, index) {
 }
 
 export function formatDailyDigest(materials) {
-  const lines = ["💧 <b>Вода UA: підсумок доби</b>"];
+  const important = materials
+    .filter((material) => {
+      const decision = decisionOf(material);
+      return decision.priorityLevel === "high" ||
+        decision.normativeAct === true ||
+        decision.normative_act === true ||
+        ["regulator", "government", "parliament", "association", "donor", "international_tech"].includes(decision.materialCategory ?? decision.sourceCategory);
+    })
+    .sort((left, right) => priorityValue(left) - priorityValue(right));
+  const lines = [
+    "💧 <b>Вода UA: підсумок дня</b>",
+    "",
+    important.length
+      ? `За день відібрано ${important.length} важливих повідомлень для водного сектору. Нижче — ключові оновлення за пріоритетами.`
+      : "Станом на сьогодні суттєвих регуляторних або галузевих змін не виявлено. У стрічці переважали локальні повідомлення щодо відключень та ремонтів.",
+  ];
   const used = new Set();
 
   for (const section of DIGEST_SECTIONS) {
     const sectionMaterials = materials
       .filter((material) => !used.has(material.id) && section.matches(decisionOf(material), material))
+      .sort((left, right) => priorityValue(left) - priorityValue(right))
       .slice(0, 7);
     sectionMaterials.forEach((material) => used.add(material.id));
     lines.push("", `<b>${section.title}</b>`);
@@ -145,10 +188,10 @@ export function formatDailyDigest(materials) {
   return lines.join("\n").slice(0, 4096);
 }
 
-async function prepareDigestMaterials(materials, prepareDisplayTitle) {
+async function prepareDigestMaterials(materials, prepareDisplayTitle, prepareContext) {
   const prepared = [];
   for (const material of materials) {
-    prepared.push(await prepareDisplayTitle(material));
+    prepared.push(await prepareContext(await prepareDisplayTitle(material)));
   }
   return prepared;
 }
@@ -161,6 +204,7 @@ export function createUpdateHandler({
   adminTelegramId,
   logger = console,
   prepareDisplayTitle = async (material) => material,
+  prepareContext = async (material) => material,
 }) {
   return async function handleUpdate(update) {
     const message = update?.message;
@@ -202,7 +246,7 @@ export function createUpdateHandler({
     }
     if (command === "/daily_digest") {
       const materials = await repository.getDailyDigestMaterials();
-      await telegram.sendMessage(chatId, formatDailyDigest(await prepareDigestMaterials(materials, prepareDisplayTitle)));
+      await telegram.sendMessage(chatId, formatDailyDigest(await prepareDigestMaterials(materials, prepareDisplayTitle, prepareContext)));
       return;
     }
     if (command === "/queue") {
@@ -225,6 +269,19 @@ export function createUpdateHandler({
     }
     if (command?.startsWith("/")) await telegram.sendMessage(chatId, HELP_MESSAGE);
   };
+}
+
+export async function sendDailyDigest({
+  repository,
+  telegram,
+  channelId,
+  prepareDisplayTitle = async (material) => material,
+  prepareContext = async (material) => material,
+}) {
+  const materials = await repository.getDailyDigestMaterials();
+  const prepared = await prepareDigestMaterials(materials, prepareDisplayTitle, prepareContext);
+  await telegram.sendMessage(channelId, formatDailyDigest(prepared));
+  return prepared.length;
 }
 
 export async function runPolling({ telegram, handleUpdate, timeoutSeconds, signal, logger = console }) {

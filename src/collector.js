@@ -2,6 +2,7 @@ import * as cheerio from "cheerio";
 import { parseNewsFeed } from "./news.js";
 import { OFFICIAL_SOURCES, sourceForUrl } from "./sources.js";
 import { preliminaryFilter } from "./topics.js";
+import { isGoogleNewsUrl, resolveGoogleNewsUrl } from "./urlResolver.js";
 
 const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.3; +https://github.com/Yurii2276/water-news-telegram-bot)";
 const TARGETED_GOOGLE_NEWS_QUERIES = [
@@ -16,6 +17,12 @@ const TARGETED_GOOGLE_NEWS_QUERIES = [
   "sludge treatment wastewater",
   "energy efficiency in water utilities Ukraine",
   "smart water infrastructure Ukraine",
+  "AI in water utilities",
+  "water infrastructure resilience",
+  "digital water utility",
+  "smart water",
+  "wastewater treatment technology",
+  "leak detection water networks",
 ];
 
 async function fetchText(url, fetchImpl, timeout = 15_000) {
@@ -29,11 +36,38 @@ async function fetchText(url, fetchImpl, timeout = 15_000) {
 }
 
 function feedCandidate(item, metadata, logger) {
-  const candidate = { ...item, url: item.url ?? item.link, ...metadata };
+  const candidate = {
+    ...item,
+    url: item.url ?? item.link,
+    ...metadata,
+    sourceName: item.source || metadata.sourceName,
+  };
   if (!candidate.url) {
     logger.warn?.(`Source item has no URL: ${candidate.sourceName} — ${candidate.title || "(без заголовка)"}`);
   }
   return candidate;
+}
+
+async function resolveGoogleCandidate(candidate, fetchImpl, logger) {
+  if (!isGoogleNewsUrl(candidate.url)) return candidate;
+  const result = await resolveGoogleNewsUrl(candidate.url, { fetchImpl, logger });
+  return {
+    ...candidate,
+    originalUrl: candidate.url,
+    url: result.url,
+    googleNewsUrlResolved: result.resolved,
+    googleNewsUrlUnresolved: result.failed,
+  };
+}
+
+async function feedCandidates(items, metadata, logger, fetchImpl, { resolveGoogleUrls = false } = {}) {
+  const candidates = items.map((item) => feedCandidate(item, metadata, logger));
+  if (!resolveGoogleUrls) return candidates;
+  const resolved = [];
+  for (const candidate of candidates) {
+    resolved.push(await resolveGoogleCandidate(candidate, fetchImpl, logger));
+  }
+  return resolved;
 }
 
 export function discoverOfficialLinks(html, source, limit = 30) {
@@ -90,14 +124,17 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
     try {
       if (source.feedUrl) {
         const { text } = await fetchText(source.feedUrl, fetchImpl);
-        const items = parseNewsFeed(text, limit)
-          .filter((item) => preliminaryFilter(item).relevant)
-          .map((item) => feedCandidate(item, {
+        const items = await feedCandidates(
+          parseNewsFeed(text, limit).filter((item) => preliminaryFilter(item).relevant),
+          {
             sourceId: source.id,
             sourceName: source.name,
             sourceCategory: source.category,
             discoveryMethod: "official_rss",
-          }, logger));
+          },
+          logger,
+          fetchImpl,
+        );
         candidates.push(...items);
       } else if (source.sitemapUrl) {
         const { text } = await fetchText(source.sitemapUrl, fetchImpl);
@@ -112,12 +149,18 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
   }
   try {
     const { text } = await fetchText(googleNewsRssUrl, fetchImpl);
-    candidates.push(...parseNewsFeed(text, limit).map((item) => feedCandidate(item, {
-      sourceId: "google_news",
-      sourceName: item.source || "Google News discovery",
-      sourceCategory: "general_news",
-      discoveryMethod: "google_news",
-    }, logger)));
+    candidates.push(...await feedCandidates(
+      parseNewsFeed(text, limit),
+      {
+        sourceId: "google_news",
+        sourceName: "Google News discovery",
+        sourceCategory: "general_news",
+        discoveryMethod: "google_news",
+      },
+      logger,
+      fetchImpl,
+      { resolveGoogleUrls: true },
+    ));
   } catch (error) {
     logger.error("Google News discovery failed", error);
   }
@@ -127,12 +170,18 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
       const url = new URL(base);
       url.searchParams.set("q", query);
       const { text } = await fetchText(url.toString(), fetchImpl);
-      candidates.push(...parseNewsFeed(text, Math.max(3, Math.ceil(limit / 4))).map((item) => feedCandidate(item, {
-        sourceId: "google_news",
-        sourceName: item.source || "Google News targeted discovery",
-        sourceCategory: "international_tech",
-        discoveryMethod: "google_news_targeted",
-      }, logger)));
+      candidates.push(...await feedCandidates(
+        parseNewsFeed(text, Math.max(3, Math.ceil(limit / 4))),
+        {
+          sourceId: "google_news",
+          sourceName: "Google News targeted discovery",
+          sourceCategory: "international_tech",
+          discoveryMethod: "google_news_targeted",
+        },
+        logger,
+        fetchImpl,
+        { resolveGoogleUrls: true },
+      ));
     } catch (error) {
       logger.error(`Google News targeted discovery failed: ${query}`, error);
     }
@@ -141,6 +190,16 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
 }
 
 export async function extractArticle(candidate, { fetchImpl = fetch } = {}) {
+  if (isGoogleNewsUrl(candidate.url)) {
+    const resolved = await resolveGoogleNewsUrl(candidate.url, { fetchImpl });
+    candidate = {
+      ...candidate,
+      originalUrl: candidate.originalUrl ?? candidate.url,
+      url: resolved.url,
+      googleNewsUrlResolved: resolved.resolved,
+      googleNewsUrlUnresolved: resolved.failed,
+    };
+  }
   const { text: html, finalUrl } = await fetchText(candidate.url, fetchImpl);
   const source = sourceForUrl(finalUrl);
   if (candidate.discoveryMethod === "google_news" && !source) {
