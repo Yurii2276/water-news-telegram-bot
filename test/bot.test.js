@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { createUpdateHandler, formatScanReport } from "../src/bot.js";
+import { createUpdateHandler, formatDailyDigest, formatScanReport } from "../src/bot.js";
 
 test("/scan starts collection and auto-publisher", async () => {
   const sent = [];
@@ -26,7 +26,7 @@ test("/scan starts collection and auto-publisher", async () => {
   });
 
   assert.equal(kicks, 1);
-  assert.match(sent.at(-1)[1], /у черзі 1/);
+  assert.match(sent.at(-1)[1], /Сѓ С‡РµСЂР·С– 1/);
 });
 
 test("admin can requeue failed publications without immediately draining queue", async () => {
@@ -56,7 +56,7 @@ test("admin can requeue failed publications without immediately draining queue",
 
   assert.deepEqual(requestedWindows, [48]);
   assert.equal(kicks, 0);
-  assert.equal(sent[0][1], "Повторно поставлено в чергу: 3");
+  assert.equal(sent[0][1], "РџРѕРІС‚РѕСЂРЅРѕ РїРѕСЃС‚Р°РІР»РµРЅРѕ РІ С‡РµСЂРіСѓ: 3");
 });
 
 test("non-admin cannot run /retry_failed_publish", async () => {
@@ -84,7 +84,7 @@ test("non-admin cannot run /retry_failed_publish", async () => {
   });
 
   assert.equal(retries, 0);
-  assert.match(sent[0][1], /лише адміну/);
+  assert.match(sent[0][1], /Р»РёС€Рµ Р°РґРјС–РЅСѓ/);
 });
 
 test("scan report includes rejection diagnostics and first titles", () => {
@@ -100,12 +100,154 @@ test("scan report includes rejection diagnostics and first titles", () => {
       other: 0,
     },
     rejectedItems: [
-      { title: "Матеріал <1>", reason: "OpenAI error: timeout" },
+      { title: "РњР°С‚РµСЂС–Р°Р» <1>", reason: "OpenAI error: timeout" },
     ],
   });
 
-  assert.match(text, /Нерелевантність: 12/);
-  assert.match(text, /Помилки OpenAI: 9/);
-  assert.match(text, /Немає тексту\/посилання: 20/);
-  assert.match(text, /Матеріал &lt;1&gt;/);
+  assert.match(text, /РќРµСЂРµР»РµРІР°РЅС‚РЅС–СЃС‚СЊ: 12/);
+  assert.match(text, /РџРѕРјРёР»РєРё OpenAI: 9/);
+  assert.match(text, /РќРµРјР°С” С‚РµРєСЃС‚Сѓ\/РїРѕСЃРёР»Р°РЅРЅСЏ: 20/);
+  assert.match(text, /РњР°С‚РµСЂС–Р°Р» &lt;1&gt;/);
+});
+
+test("scan report includes category and priority counters", () => {
+  const text = formatScanReport({
+    discovered: 5,
+    queued: 3,
+    duplicates: 0,
+    rejected: 2,
+    accepted_title_keyword_fallback: 1,
+    categories: {
+      regulator: 1,
+      government: 0,
+      parliament: 1,
+      association: 0,
+      vodokanal: 0,
+      local_media: 1,
+      donor: 0,
+      international_tech: 0,
+      general_news: 0,
+    },
+    priorities: { high: 2, medium: 0, low: 1 },
+    rejectedBy: {},
+  });
+
+  assert.match(text, /regulator: 1/);
+  assert.match(text, /parliament: 1/);
+  assert.match(text, /local_media: 1/);
+  assert.match(text, /High priority: 2/);
+  assert.match(text, /Low priority: 1/);
+});
+
+test("/publish_queue_now is admin-only and calls publisher drain", async () => {
+  const sent = [];
+  let drains = 0;
+  const handleUpdate = createUpdateHandler({
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    repository: {},
+    pipeline: {},
+    publisher: {
+      drain: async () => {
+        drains += 1;
+        return { publishedNow: 2, dryRun: false, limit: 10 };
+      },
+    },
+    adminTelegramId: 42,
+  });
+
+  await handleUpdate({
+    message: { chat: { id: 42 }, from: { id: 42 }, text: "/publish_queue_now" },
+  });
+
+  assert.equal(drains, 1);
+  assert.equal(sent[0][1], "РџСѓР±Р»С–РєР°С†С–СЏ Р·Р°РїСѓС‰РµРЅР°. РћРїСѓР±Р»С–РєРѕРІР°РЅРѕ: 2. DRY_RUN: false. Р›С–РјС–С‚: 10.");
+
+  await handleUpdate({
+    message: { chat: { id: 7 }, from: { id: 7 }, text: "/publish_queue_now" },
+  });
+
+  assert.equal(drains, 1);
+  assert.match(sent.at(-1)[1], /Р»РёС€Рµ Р°РґРјС–РЅСѓ/);
+});
+
+test("/daily_digest is admin-only and returns grouped sections", async () => {
+  const sent = [];
+  let reads = 0;
+  const handleUpdate = createUpdateHandler({
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    repository: {
+      getDailyDigestMaterials: async () => {
+        reads += 1;
+        return [
+          {
+            id: 1,
+            title: "РќРљР Р•РљРџ Р·Р°С‚РІРµСЂРґРёР»Р° С‚Р°СЂРёС„ РЅР° РІРѕРґСѓ",
+            source_name: "РќРљР Р•РљРџ",
+            ai_decision: { materialCategory: "regulator", category: "tariffs", priorityLevel: "high" },
+          },
+          {
+            id: 2,
+            title: "UNICEF WASH РїСЂРѕС”РєС‚ РґР»СЏ РІРѕРґРЅРѕС— С–РЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂРё",
+            source_name: "UNICEF",
+            ai_decision: { materialCategory: "donor", category: "donors", priorityLevel: "high" },
+          },
+        ];
+      },
+    },
+    pipeline: {},
+    publisher: {},
+    adminTelegramId: 42,
+  });
+
+  await handleUpdate({
+    message: { chat: { id: 42 }, from: { id: 42 }, text: "/daily_digest" },
+  });
+
+  assert.equal(reads, 1);
+  assert.match(sent[0][1], /Р’РѕРґР° UA: РїС–РґСЃСѓРјРѕРє РґРѕР±Рё/);
+  assert.match(sent[0][1], /Р РµРіСѓР»СЋРІР°РЅРЅСЏ \/ РќРљР Р•РљРџ \/ Р·Р°РєРѕРЅРѕРґР°РІСЃС‚РІРѕ/);
+  assert.match(sent[0][1], /Р’С–РґРЅРѕРІР»РµРЅРЅСЏ \/ РґРѕРЅРѕСЂРё/);
+
+  await handleUpdate({
+    message: { chat: { id: 7 }, from: { id: 7 }, text: "/daily_digest" },
+  });
+  assert.equal(reads, 1);
+});
+
+test("/daily_digest uses Ukrainian display titles", async () => {
+  const sent = [];
+  const handleUpdate = createUpdateHandler({
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    repository: {
+      getDailyDigestMaterials: async () => [
+        {
+          id: 1,
+          title: "Global smart water leak detection technology cuts non-revenue water",
+          source_name: "WaterWorld",
+          ai_decision: { materialCategory: "international_tech", category: "technology", priorityLevel: "medium" },
+        },
+      ],
+    },
+    pipeline: {},
+    publisher: {},
+    adminTelegramId: 42,
+    prepareDisplayTitle: async (material) => ({
+      ...material,
+      displayTitleUk: "РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё",
+    }),
+  });
+
+  await handleUpdate({
+    message: { chat: { id: 42 }, from: { id: 42 }, text: "/daily_digest" },
+  });
+
+  assert.match(sent[0][1], /РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё/);
+  assert.doesNotMatch(sent[0][1], /Global smart water leak detection/);
+  assert.match(sent[0][1], /WaterWorld/);
+});
+
+test("daily digest formatter emits empty section fallback", () => {
+  const text = formatDailyDigest([]);
+  assert.match(text, /РќРµРјР°С” РІР°Р¶Р»РёРІРёС… РїРѕРІС–РґРѕРјР»РµРЅСЊ/);
+  assert.match(text, /РўРµС…РЅРѕР»РѕРіС–С— С‚Р° РјС–Р¶РЅР°СЂРѕРґРЅР° РїСЂР°РєС‚РёРєР°/);
 });

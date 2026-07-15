@@ -5,13 +5,14 @@ import {
   createAutoPublisher,
   verifyPrimarySource,
 } from "../src/publisher.js";
+import { prepareMaterialDisplayTitle } from "../src/translation.js";
 
 function queuedMaterial(id = 1) {
   return {
     id,
-    title: "Перевірена новина",
+    title: "РџРµСЂРµРІС–СЂРµРЅР° РЅРѕРІРёРЅР°",
     url: "https://www.davr.gov.ua/news/test",
-    source_name: "Держводагентство",
+    source_name: "Р”РµСЂР¶РІРѕРґР°РіРµРЅС‚СЃС‚РІРѕ",
     ai_decision: {
       relevant: true,
       relevanceScore: 95,
@@ -19,9 +20,9 @@ function queuedMaterial(id = 1) {
       confidenceScore: 92,
       category: "water_supply",
       importance: 80,
-      summary: "Перевірене резюме.",
-      whyImportant: "Перевірене пояснення.",
-      hashtags: ["#вода"],
+      summary: "РџРµСЂРµРІС–СЂРµРЅРµ СЂРµР·СЋРјРµ.",
+      whyImportant: "РџРµСЂРµРІС–СЂРµРЅРµ РїРѕСЏСЃРЅРµРЅРЅСЏ.",
+      hashtags: ["#РІРѕРґР°"],
     },
   };
 }
@@ -52,6 +53,82 @@ test("auto-publisher sends verified queued material without buttons", async () =
   assert.equal(result.publishedNow, 1);
   assert.equal(sent[0].length, 2);
   assert.deepEqual(statuses[0].slice(0, 2), [1, "published"]);
+});
+
+test("Telegram publication uses Ukrainian display title and keeps source and URL", async () => {
+  const sent = [];
+  const statuses = [];
+  const queue = [{
+    ...queuedMaterial(),
+    title: "Global smart water leak detection technology cuts non-revenue water",
+    source_name: "WaterWorld",
+    url: "https://example.com/smart-water",
+  }];
+  const publisher = createAutoPublisher({
+    repository: {
+      countPublishedToday: async () => 0,
+      getQueue: async () => queue.splice(0, 1),
+      setStatus: async (...args) => statuses.push(args),
+      recordPublishFailure: async () => {},
+    },
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    channelId: "-1001",
+    intervalMs: 0,
+    dryRun: false,
+    verifySource: async () => ({ verified: true }),
+    prepareDisplayTitle: async (material) => ({
+      ...material,
+      displayTitleUk: "РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё",
+    }),
+    sleep: async () => {},
+  });
+
+  await publisher.drain();
+
+  assert.match(sent[0][1], /РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё/);
+  assert.doesNotMatch(sent[0][1], /Global smart water leak detection/);
+  assert.match(sent[0][1], /Р”Р¶РµСЂРµР»Рѕ: WaterWorld/);
+  assert.match(sent[0][1], /рџ”— https:\/\/example\.com\/smart-water/);
+  assert.equal(statuses[0][1], "published");
+});
+
+test("OpenAI translation failure does not crash publishing", async () => {
+  const sent = [];
+  const queue = [{
+    ...queuedMaterial(),
+    title: "Smart water infrastructure funding announced",
+    url: "https://example.com/funding",
+  }];
+  const publisher = createAutoPublisher({
+    repository: {
+      countPublishedToday: async () => 0,
+      getQueue: async () => queue.splice(0, 1),
+      setStatus: async () => {},
+      recordPublishFailure: async () => {},
+    },
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    channelId: "-1001",
+    intervalMs: 0,
+    dryRun: false,
+    verifySource: async () => ({ verified: true }),
+    prepareDisplayTitle: (material) =>
+      prepareMaterialDisplayTitle(material, {
+        apiKey: "test-key",
+        fetchImpl: async () => ({
+          ok: false,
+          status: 429,
+          json: async () => ({ error: { message: "quota exceeded" } }),
+        }),
+        logger: { warn: () => {} },
+      }),
+    sleep: async () => {},
+    logger: { error: () => {} },
+  });
+
+  const result = await publisher.drain();
+
+  assert.equal(result.publishedNow, 1);
+  assert.match(sent[0][1], /Smart water infrastructure funding announced/);
 });
 
 test("publisher retries and journals terminal failure", async () => {

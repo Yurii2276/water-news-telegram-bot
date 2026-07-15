@@ -103,7 +103,16 @@ export function createDatabase(databaseUrl) {
         `SELECT * FROM materials
          WHERE status = 'queued'
            AND (next_publish_at IS NULL OR next_publish_at <= NOW())
-         ORDER BY (ai_decision->>'importance')::int DESC NULLS LAST, id ASC
+         ORDER BY
+           CASE ai_decision->>'priorityLevel'
+             WHEN 'high' THEN 0
+             WHEN 'medium' THEN 1
+             WHEN 'low' THEN 2
+             ELSE 1
+           END,
+           (ai_decision->>'priorityScore')::int DESC NULLS LAST,
+           (ai_decision->>'importance')::int DESC NULLS LAST,
+           id ASC
          LIMIT $1`,
         [limit],
       );
@@ -190,6 +199,25 @@ export function createDatabase(databaseUrl) {
         `SELECT * FROM materials WHERE status = 'published'
          ORDER BY published_at DESC NULLS LAST, id DESC LIMIT $1`,
         [limit],
+      );
+      return rows;
+    },
+
+    async getDailyDigestMaterials() {
+      const { rows } = await pool.query(
+        `SELECT * FROM materials
+         WHERE status IN ('published', 'queued', 'dry_run')
+           AND updated_at >= NOW() - INTERVAL '24 hours'
+         ORDER BY
+           CASE ai_decision->>'priorityLevel'
+             WHEN 'high' THEN 0
+             WHEN 'medium' THEN 1
+             WHEN 'low' THEN 2
+             ELSE 1
+           END,
+           (ai_decision->>'priorityScore')::int DESC NULLS LAST,
+           updated_at DESC
+         LIMIT 60`,
       );
       return rows;
     },

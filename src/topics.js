@@ -9,7 +9,24 @@ export const TOPIC_CATEGORIES = [
   "recovery",
   "donors",
   "events",
+  "technology",
+  "infrastructure",
+  "outages",
 ];
+
+export const SOURCE_CATEGORIES = [
+  "regulator",
+  "government",
+  "parliament",
+  "association",
+  "vodokanal",
+  "local_media",
+  "donor",
+  "international_tech",
+  "general_news",
+];
+
+export const PRIORITY_LEVELS = ["high", "medium", "low"];
 
 const TOPIC_PATTERNS = {
   water_supply: [
@@ -64,6 +81,17 @@ const TOPIC_PATTERNS = {
     /кругл\p{L}*\s+стіл/iu,
     /семінар/i,
   ],
+  technology: [
+    /smart water/i,
+    /leak detection/i,
+    /non[- ]revenue water/i,
+    /wastewater treatment/i,
+    /wastewater technology/i,
+    /water supply technology/i,
+    /water supply infrastructure/i,
+    /water infrastructure/i,
+    /digital water/i,
+  ],
 };
 
 const DIRECT_WATER_CONTEXT = [
@@ -102,13 +130,77 @@ const STRONG_TITLE_KEYWORDS = [
 const HOT_WATER_OR_HEATING = /гаряч\p{L}*\s+вод|опален|теплопостач/iu;
 const WATER_UTILITY_EXCEPTION = /водоканал|водопостач|водовідвед|питн\p{L}*\s+вод|тариф\p{L}*\s+на\s+вод|без\s+води|аварі\p{L}*\s+(?:на\s+)?(?:водопровод|мереж)|комунальн\p{L}*\s+послуг/iu;
 
+const PROFESSIONAL_STRONG_KEYWORDS = [
+  ["НКРЕКП", /нкрекп/i],
+  ["тарифи на централізоване водопостачання", /тариф\p{L}*\s+на\s+централізован\p{L}*\s+водопостач/iu],
+  ["тарифи на централізоване водовідведення", /тариф\p{L}*\s+на\s+централізован\p{L}*\s+водовідвед/iu],
+  ["централізоване водопостачання", /централізован\p{L}*\s+водопостач/iu],
+  ["централізоване водовідведення", /централізован\p{L}*\s+водовідвед/iu],
+  ["інвестиційна програма водоканалу", /інвестиційн\p{L}*\s+програм\p{L}*.*водоканал/iu],
+  ["схема водопостачання", /схем\p{L}*\s+водопостач/iu],
+  ["водна стратегія", /водн\p{L}*\s+стратег/iu],
+  ["питна вода", /питн\p{L}*\s+вод/iu],
+  ["якість питної води", /якіст\p{L}*\s+питн\p{L}*\s+вод/iu],
+  ["водна безпека", /водн\p{L}*\s+безпек/iu],
+  ["WASH", /\bWASH\b/i],
+  ["донорський проєкт", /донорськ\p{L}*\s+про[єе]кт/iu],
+  ["реконструкція водопроводу", /реконструкці\p{L}*\s+водопровод/iu],
+  ["реконструкція очисних споруд", /реконструкці\p{L}*\s+очисн\p{L}*\s+споруд/iu],
+  ["каналізаційні очисні споруди", /каналізаційн\p{L}*\s+очисн\p{L}*\s+споруд/iu],
+  ["водна інфраструктура", /водн\p{L}*\s+інфраструктур/iu],
+  ["аварія на водогоні", /аварі\p{L}*\s+на\s+водогон/iu],
+  ["магістральний водогін", /магістральн\p{L}*\s+водогін/iu],
+  ["без води", /без\s+води/iu],
+  ["не буде води", /не\s+буде\s+води/iu],
+  ["відключення води", /відключенн\p{L}*\s+вод/iu],
+  ["non-revenue water", /non[- ]revenue water/i],
+  ["smart water", /smart water/i],
+  ["leak detection", /leak detection/i],
+  ["wastewater treatment", /wastewater treatment/i],
+  ["sludge treatment", /sludge treatment/i],
+  ["digital water utility", /digital water utility/i],
+  ["wastewater reuse", /wastewater reuse/i],
+  ["desalination technology", /desalination technology/i],
+  ["energy efficiency in water utilities", /energy efficiency.*water utilit/i],
+  ["smart water infrastructure", /smart water infrastructure/i],
+  ["water supply technology", /water supply technology/i],
+  ["water supply infrastructure", /water supply infrastructure/i],
+  ["water supply innovation", /water supply innovation/i],
+  ["wastewater technology", /wastewater technology/i],
+  ["donor water infrastructure", /(?:donor|grant|funding|recovery).*(?:water|wastewater).*(?:infrastructure|utility|network)/i],
+];
+
+const HIGH_PRIORITY_CONTEXT = /нкрекп|тариф|інвестиційн\p{L}*\s+програм|законопро[єе]кт|законодав|кабінет|міністерств|відновлен|реконструкц|WASH|донор|грант|world bank|ebrd|unicef|undp|usaid|ukraine facility|очисн\p{L}*\s+споруд|водн\p{L}*\s+безпек/iu;
+const MEDIUM_PRIORITY_CONTEXT = /водоканал|водопостач|водовідвед|питн\p{L}*\s+вод|якіст\p{L}*\s+вод|ремонт|інфраструктур|smart water|wastewater treatment|leak detection|non[- ]revenue water|sludge treatment|digital water/iu;
+const LOCAL_OUTAGE_CONTEXT = /без\s+води|відключенн\p{L}*\s+вод|не\s+буде\s+води|водопостачанн\p{L}*\s+відсутн/iu;
+const LARGE_OUTAGE_CONTEXT = /район|міст[оаі]|обласн\p{L}*\s+центр|тисяч\p{L}*\s+(?:жител|мешкан)|доб\p{L}|дні|критичн\p{L}*\s+інфраструктур|питн\p{L}*\s+вод|якіст\p{L}*\s+вод|водоканал|водн\p{L}*\s+безпек/iu;
+const ROUTINE_SMALL_REPAIR = /одн\p{L}*\s+вулиц|кільк\p{L}*\s+годин|планов\p{L}*\s+ремонт|тимчасов\p{L}*\s+ремонт|ремонтн\p{L}*\s+робот/iu;
+const FLOOD_EMERGENCY_ONLY = /потоп|повін|затоплен|загинув|смерт|рятувальник|дснс/iu;
+const WATER_INFRASTRUCTURE_EXCEPTION = /водопостач|водовідвед|питн\p{L}*\s+вод|водоканал|водогін|водопЀов|стічн\p{L}*\s+вод|очисн\p{L}*\s+споруд|комунальн\p{L}*\s+послуг|водн\p{L}*\s+інфраструктур/iu;
+const ENERGY_ONLY_TARIFF = /електроенерг|енергетик|газ|тепло|опален/iu;
+
+function hasRoutineSmallRepairText(text) {
+  const normalized = text.toLowerCase();
+  return (
+    normalized.includes("одній вулиці") ||
+    normalized.includes("одна вулиця") ||
+    normalized.includes("кілька годин") ||
+    normalized.includes("плановий ремонт") ||
+    normalized.includes("тимчасовий ремонт")
+  );
+}
+
 export function titleKeywordFallback(title) {
   const normalizedTitle = String(title ?? "").replace(/\s+/g, " ").trim();
   if (!normalizedTitle) return { accepted: false, keyword: null };
   if (HOT_WATER_OR_HEATING.test(normalizedTitle) && !WATER_UTILITY_EXCEPTION.test(normalizedTitle)) {
     return { accepted: false, keyword: null };
   }
-  const match = STRONG_TITLE_KEYWORDS.find(([, pattern]) => pattern.test(normalizedTitle));
+  if (ENERGY_ONLY_TARIFF.test(normalizedTitle) && !WATER_INFRASTRUCTURE_EXCEPTION.test(normalizedTitle)) {
+    return { accepted: false, keyword: null };
+  }
+  const match = [...PROFESSIONAL_STRONG_KEYWORDS, ...STRONG_TITLE_KEYWORDS]
+    .find(([, pattern]) => pattern.test(normalizedTitle));
   return match
     ? { accepted: true, keyword: match[0] }
     : { accepted: false, keyword: null };
@@ -148,13 +240,17 @@ export function preliminaryFilter(material) {
   const waterLegislation =
     hasCategory(categories, "legislation") &&
     /вод|water|vod/i.test(haystack);
+  const professionalTitleContext =
+    PROFESSIONAL_STRONG_KEYWORDS.some(([, pattern]) => pattern.test(haystack)) &&
+    (!ENERGY_ONLY_TARIFF.test(haystack) || WATER_INFRASTRUCTURE_EXCEPTION.test(haystack));
   const relevant =
     directWaterContext ||
     nercContext ||
     communityInfrastructure ||
     recoveryInfrastructure ||
     donorProject ||
-    waterLegislation;
+    waterLegislation ||
+    professionalTitleContext;
 
   return {
     relevant,
@@ -164,5 +260,112 @@ export function preliminaryFilter(material) {
       : categories.length > 0
         ? "Supporting topic found without water-sector context"
         : "No water-sector topic matched",
+  };
+}
+
+function textOf(material) {
+  return [material?.title, material?.summary, material?.snippet, material?.content]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ");
+}
+
+export function inferSourceCategory(material) {
+  const explicit = material?.sourceCategory ?? material?.source_category;
+  if (SOURCE_CATEGORIES.includes(explicit)) return explicit;
+  const sourceId = String(material?.sourceId ?? material?.source_id ?? "");
+  const sourceName = String(material?.sourceName ?? material?.source_name ?? "");
+  const url = String(material?.url ?? "");
+  const haystack = `${sourceId} ${sourceName} ${url}`.toLowerCase();
+  if (/nerc|нкрекп/.test(haystack)) return "regulator";
+  if (/rada|закон|committee|комітет/.test(haystack)) return "parliament";
+  if (/kmu|cabinet|mindev|davr|ministry|міністер|держвод/.test(haystack)) return "government";
+  if (/auc|association|асоціац|ukrvodokanal/.test(haystack)) return "association";
+  if (/vodokanal|водоканал/.test(haystack)) return "vodokanal";
+  if (/unicef|worldbank|world bank|ebrd|undp|usaid|europa|donor|wash/.test(haystack)) return "donor";
+  if (/technology|smart-water|waterworld|iwa|aquatech/.test(haystack)) return "international_tech";
+  if (/google_news|google news/.test(haystack)) return "general_news";
+  return "general_news";
+}
+
+export function inferMaterialCategory(material, preliminaryCategories = []) {
+  const existing = material?.ai_decision?.materialCategory ?? material?.aiDecision?.materialCategory;
+  if (SOURCE_CATEGORIES.includes(existing)) return existing;
+  const sourceCategory = inferSourceCategory(material);
+  if (sourceCategory !== "general_news") return sourceCategory;
+  const text = textOf(material);
+  if (/smart water|wastewater treatment|wastewater technology|water supply technology|water supply infrastructure|non[- ]revenue water|leak detection|sludge treatment|digital water|desalination/i.test(text)) {
+    return "international_tech";
+  }
+  if (/водоканал/iu.test(text)) return "vodokanal";
+  if (LOCAL_OUTAGE_CONTEXT.test(text)) return "local_media";
+  if (preliminaryCategories.includes("donors")) return "donor";
+  if (preliminaryCategories.includes("legislation")) return "parliament";
+  return "general_news";
+}
+
+export function isNoiseOnly(material) {
+  const text = textOf(material);
+  if (HOT_WATER_OR_HEATING.test(text) && !WATER_UTILITY_EXCEPTION.test(text)) return true;
+  if (FLOOD_EMERGENCY_ONLY.test(text) && !WATER_INFRASTRUCTURE_EXCEPTION.test(text)) return true;
+  return false;
+}
+
+export function classifyMaterialProfile(material, preliminaryCategories = []) {
+  const text = textOf(material);
+  const sourceCategory = inferSourceCategory(material);
+  const materialCategory = inferMaterialCategory(material, preliminaryCategories);
+  const localOutageOnly = LOCAL_OUTAGE_CONTEXT.test(text) &&
+    !HIGH_PRIORITY_CONTEXT.test(text) &&
+    !LARGE_OUTAGE_CONTEXT.test(text);
+  const routineSmallRepair = ROUTINE_SMALL_REPAIR.test(text) &&
+    (LOCAL_OUTAGE_CONTEXT.test(text) || /ремонт/iu.test(text)) &&
+    !HIGH_PRIORITY_CONTEXT.test(text) &&
+    !LARGE_OUTAGE_CONTEXT.test(text);
+  const routineSmallRepairText =
+    hasRoutineSmallRepairText(text) &&
+    (LOCAL_OUTAGE_CONTEXT.test(text) || /ремонт/iu.test(text)) &&
+    !HIGH_PRIORITY_CONTEXT.test(text);
+
+  let priorityLevel = "medium";
+  let priorityScore = 60;
+
+  if (
+    ["regulator", "government", "parliament", "association", "donor"].includes(sourceCategory) ||
+    HIGH_PRIORITY_CONTEXT.test(text)
+  ) {
+    priorityLevel = "high";
+    priorityScore = 90;
+  } else if (materialCategory === "international_tech" || MEDIUM_PRIORITY_CONTEXT.test(text)) {
+    priorityLevel = "medium";
+    priorityScore = 65;
+  }
+
+  if (localOutageOnly || routineSmallRepair || routineSmallRepairText || materialCategory === "local_media") {
+    priorityLevel = "low";
+    priorityScore = routineSmallRepair || routineSmallRepairText ? 25 : 35;
+  }
+
+  if (LOCAL_OUTAGE_CONTEXT.test(text) && LARGE_OUTAGE_CONTEXT.test(text) && !(routineSmallRepair || routineSmallRepairText)) {
+    priorityLevel = priorityLevel === "high" ? "high" : "medium";
+    priorityScore = Math.max(priorityScore, 60);
+  }
+
+  return {
+    sourceCategory,
+    materialCategory,
+    priorityLevel,
+    priorityScore,
+    localOutageOnly,
+    routineSmallRepair: routineSmallRepair || routineSmallRepairText,
+  };
+}
+
+export function enrichDecisionWithProfile(decision, material, preliminaryCategories = []) {
+  const profile = classifyMaterialProfile(material, preliminaryCategories);
+  return {
+    ...decision,
+    ...profile,
+    importance: Math.max(decision?.importance ?? 0, profile.priorityScore),
   };
 }

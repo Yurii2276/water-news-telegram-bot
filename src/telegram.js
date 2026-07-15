@@ -1,3 +1,5 @@
+import { titleForDisplay } from "./translation.js";
+
 const API_BASE_URL = "https://api.telegram.org";
 
 export function escapeHtml(value) {
@@ -12,33 +14,43 @@ function decisionOf(material) {
   return material.ai_decision ?? material.aiDecision ?? {};
 }
 
+export const CATEGORY_LABELS_UK = {
+  regulator: "Регулювання",
+  government: "Уряд / міністерства",
+  parliament: "Законодавство",
+  association: "Професійна спільнота",
+  vodokanal: "Водоканал",
+  local_media: "Ситуація в громаді",
+  donor: "Відновлення / донори",
+  international_tech: "Технології",
+  general_news: "Новини сектору",
+};
+
+function materialCategory(material) {
+  const decision = decisionOf(material);
+  return decision.materialCategory ??
+    decision.sourceCategory ??
+    material.sourceCategory ??
+    material.source_category ??
+    "general_news";
+}
+
 export function formatPublication(material) {
   if (material.editor_text) return material.editor_text;
-  const decision = decisionOf(material);
-  if (decision.titleKeywordFallback) {
-    const snippet = String(decision.summary ?? material.content ?? "").trim();
-    return [
-      `<b>${escapeHtml(material.title)}</b>`,
-      snippet ? `\n${escapeHtml(snippet)}` : "",
-      `\n<a href="${escapeHtml(material.url)}">Джерело: ${escapeHtml(material.source_name ?? material.sourceName)}</a>`,
-    ]
-      .filter(Boolean)
-      .join("\n")
-      .slice(0, 4096);
-  }
-  const hashtags = (decision.hashtags ?? []).join(" ");
+  const category = materialCategory(material);
+  const label = CATEGORY_LABELS_UK[category] ?? CATEGORY_LABELS_UK.general_news;
+  const source = material.source_name ?? material.sourceName ?? "Джерело";
+  const url = material.url ?? "";
+  const displayTitle = titleForDisplay(material);
   return [
-    `<b>${escapeHtml(material.title)}</b>`,
+    `💧 <b>${escapeHtml(label)}</b>`,
     "",
-    escapeHtml(decision.summary),
+    `<b>${escapeHtml(displayTitle)}</b>`,
     "",
-    `<b>Чому це важливо</b>`,
-    escapeHtml(decision.whyImportant),
-    "",
-    `<a href="${escapeHtml(material.url)}">Першоджерело: ${escapeHtml(material.source_name ?? material.sourceName)}</a>`,
-    hashtags ? `\n${escapeHtml(hashtags)}` : "",
+    `Джерело: ${escapeHtml(source)}`,
+    `🔗 ${escapeHtml(url)}`,
   ]
-    .filter((line) => line !== undefined)
+    .filter((line) => line !== undefined && line !== null)
     .join("\n")
     .slice(0, 4096);
 }
