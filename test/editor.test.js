@@ -10,14 +10,14 @@ function candidate(title, suffix) {
     title,
     url: `https://www.davr.gov.ua/news/${suffix}`,
     sourceId: "davr",
-    sourceName: "Р”РµСЂР¶РІРѕРґР°РіРµРЅС‚СЃС‚РІРѕ",
+    sourceName: "Держводагентство",
     discoveryMethod: "official",
   };
 }
 
 test("missing and invalid candidate URLs do not crash scan", async () => {
-  const withoutUrl = { title: "РњР°С‚РµСЂС–Р°Р» Р±РµР· URL", sourceId: "davr" };
-  const invalidUrl = { title: "РњР°С‚РµСЂС–Р°Р» Р· invalid URL", url: "not a url", sourceId: "davr" };
+  const withoutUrl = { title: "Матеріал без URL", sourceId: "davr" };
+  const invalidUrl = { title: "Матеріал з invalid URL", url: "not a url", sourceId: "davr" };
   let extracts = 0;
   let writes = 0;
   const pipeline = createEditorPipeline({
@@ -41,19 +41,19 @@ test("missing and invalid candidate URLs do not crash scan", async () => {
 test("saveRejected skips database write without valid URL", async () => {
   let writes = 0;
   const repository = { saveMaterial: async () => { writes += 1; } };
-  assert.equal(await saveRejected(repository, { title: "Р‘РµР· URL" }, "filtered_out", "missing"), null);
+  assert.equal(await saveRejected(repository, { title: "Без URL" }, "filtered_out", "missing"), null);
   assert.equal(await saveRejected(repository, { title: "Bad", url: "javascript:alert(1)" }, "filtered_out", "invalid"), null);
   assert.equal(writes, 0);
 });
 
 test("strong water-sector titles queue without extraction or OpenAI", async () => {
   const items = [
-    candidate("РљСѓР± РїРѕРЅР°Рґ 100 РіСЂРёРІРµРЅСЊ: С…РѕС‡СѓС‚СЊ РїС–РґРІРёС‰РёС‚Рё С‚Р°СЂРёС„ РЅР° РІРѕРґСѓ", "tariff"),
-    candidate("Р§Р°СЃС‚РёРЅР° РћРґРµСЃРё Р·Р°Р»РёС€РёР»Р°СЃСЏ Р±РµР· РІРѕРґРё", "outage"),
-    candidate("РњРёРєРѕР»Р°С—РІРІРѕРґРѕРєР°РЅР°Р» С‡РµСЂРµР· Р·РЅРѕС€РµРЅС– РјРµСЂРµР¶С– РІС‚СЂР°С‡Р°С” 40% РІРѕРґРё", "losses"),
-    candidate("РћР±РјС–Р»С–РЅРЅСЏ Р”РЅС–СЃС‚СЂР° Р·Р°РіСЂРѕР¶СѓС” РІРѕРґРѕРїРѕСЃС‚Р°С‡Р°РЅРЅСЋ РіСЂРѕРјР°РґРё", "dniester"),
+    candidate("Куб понад 100 гривень: хочуть підвищити тариф на воду", "tariff"),
+    candidate("Частина Одеси залишилася без води", "outage"),
+    candidate("Миколаївводоканал через зношені мережі втрачає 40% води", "losses"),
+    candidate("Обміління Дністра загрожує водопостачанню громади", "dniester"),
   ];
-  items[0].summary = "Р РµРіСѓР»СЏС‚РѕСЂ СЂРѕР·РіР»СЏРґР°С” Р·РјС–РЅСѓ С‚Р°СЂРёС„Сѓ.";
+  items[0].summary = "Регулятор розглядає зміну тарифу.";
   const saved = [];
   let extracts = 0;
   let classifications = 0;
@@ -78,7 +78,7 @@ test("strong water-sector titles queue without extraction or OpenAI", async () =
 });
 
 test("pure hot-water-only title remains rejected", async () => {
-  const item = candidate("РЈ РјС–СЃС‚С– С‚РёРјС‡Р°СЃРѕРІРѕ РЅРµ Р±СѓРґРµ РіР°СЂСЏС‡РѕС— РІРѕРґРё С‡РµСЂРµР· СЂРµРјРѕРЅС‚ С‚РµРїР»РѕРјРµСЂРµР¶С–", "hot-water");
+  const item = candidate("У місті тимчасово не буде гарячої води через ремонт тепломережі", "hot-water");
   const saved = [];
   const pipeline = createEditorPipeline({
     discover: async () => [item],
@@ -99,44 +99,45 @@ test("pure hot-water-only title remains rejected", async () => {
 
 test("fallback Telegram post uses title, source, URL and optional snippet", () => {
   const text = formatPublication({
-    title: "РўР°СЂРёС„Рё РЅР° РІРѕРґСѓ Р·РјС–РЅРёР»РёСЃСЏ",
+    title: "Тарифи на воду змінилися",
     url: "https://example.com/water",
-    sourceName: "РџСЂРёРєР»Р°Рґ РґР¶РµСЂРµР»Р°",
-    content: "РљРѕСЂРѕС‚РєРёР№ РґРѕСЃС‚СѓРїРЅРёР№ РѕРїРёСЃ РјР°С‚РµСЂС–Р°Р»Сѓ.",
+    sourceName: "Приклад джерела",
+    content: "Короткий доступний опис матеріалу.",
     aiDecision: { titleKeywordFallback: true },
   });
-  assert.match(text, /РўР°СЂРёС„Рё РЅР° РІРѕРґСѓ Р·РјС–РЅРёР»РёСЃСЏ/);
-  assert.match(text, /РџСЂРёРєР»Р°Рґ РґР¶РµСЂРµР»Р°/);
+  assert.match(text, /Тарифи на воду змінилися/);
+  assert.match(text, /Приклад джерела/);
   assert.match(text, /https:\/\/example\.com\/water/);
-  assert.match(text, /рџ’§ <b>РќРѕРІРёРЅРё СЃРµРєС‚РѕСЂСѓ<\/b>/);
-  assert.match(text, /рџ”— https:\/\/example\.com\/water/);
-  assert.doesNotMatch(text, /Р§РѕРјСѓ С†Рµ РІР°Р¶Р»РёРІРѕ/);
+  assert.match(text, /💧 <b>Новини сектору<\/b>/);
+  assert.match(text, /🔗 <a href="https:\/\/example\.com\/water">Читати джерело<\/a>/);
+  assert.match(text, /Матеріал стосується водного сектору/);
+  assert.doesNotMatch(text, /Чому це важливо/);
 });
 
 test("professional sector titles are categorized and prioritized for daily monitoring", async () => {
   const items = [
     {
-      ...candidate("РќРљР Р•РљРџ СЃС…РІР°Р»РёР»Р° С‚Р°СЂРёС„Рё РЅР° С†РµРЅС‚СЂР°Р»С–Р·РѕРІР°РЅРµ РІРѕРґРѕРїРѕСЃС‚Р°С‡Р°РЅРЅСЏ РґР»СЏ Р»С–С†РµРЅР·С–Р°С‚С–РІ", "nerc-tariff"),
+      ...candidate("НКРЕКП схвалила тарифи на централізоване водопостачання для ліцензіатів", "nerc-tariff"),
       sourceId: "nerc",
       sourceCategory: "regulator",
     },
     {
-      ...candidate("РњС–РЅС–СЃС‚РµСЂСЃС‚РІРѕ РѕРіРѕР»РѕСЃРёР»Рѕ РІС–РґРЅРѕРІР»РµРЅРЅСЏ РІРѕРґРЅРѕС— С–РЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂРё РіСЂРѕРјР°Рґ", "ministry-recovery"),
+      ...candidate("Міністерство оголосило відновлення водної інфраструктури громад", "ministry-recovery"),
       sourceId: "mindev",
       sourceCategory: "government",
     },
     {
-      ...candidate("Р’РµСЂС…РѕРІРЅР° Р Р°РґР° СЂРѕР·РіР»СЏРЅРµ Р·Р°РєРѕРЅРѕРїСЂРѕС”РєС‚ С‰РѕРґРѕ РїРёС‚РЅРѕС— РІРѕРґРё", "rada-bill"),
+      ...candidate("Верховна Рада розгляне законопроєкт щодо питної води", "rada-bill"),
       sourceId: "rada",
       sourceCategory: "parliament",
     },
     {
-      ...candidate("РђСЃРѕС†С–Р°С†С–СЏ РІРѕРґРѕРєР°РЅР°Р»С–РІ РѕР±РіРѕРІРѕСЂРёР»Р° С–РЅРІРµСЃС‚РёС†С–Р№РЅР° РїСЂРѕРіСЂР°РјР° РІРѕРґРѕРєР°РЅР°Р»Сѓ", "association"),
+      ...candidate("Асоціація водоканалів обговорила інвестиційна програма водоканалу", "association"),
       sourceId: "auc",
       sourceCategory: "association",
     },
     {
-      ...candidate("UNICEF Р·Р°РїСѓСЃРєР°С” WASH РґРѕРЅРѕСЂСЃСЊРєРёР№ РїСЂРѕС”РєС‚ РґР»СЏ РІРѕРґРЅРѕС— С–РЅС„СЂР°СЃС‚СЂСѓРєС‚СѓСЂРё", "wash"),
+      ...candidate("UNICEF запускає WASH донорський проєкт для водної інфраструктури", "wash"),
       sourceId: "unicef_ukraine",
       sourceCategory: "donor",
     },
@@ -146,12 +147,12 @@ test("professional sector titles are categorized and prioritized for daily monit
       sourceCategory: "international_tech",
     },
     {
-      ...candidate("Р§Р°СЃС‚РёРЅР° РјС–СЃС‚Р° Р·Р°Р»РёС€РёР»Р°СЃСЏ Р±РµР· РІРѕРґРё С‡РµСЂРµР· Р°РІР°СЂС–СЋ", "local-outage"),
+      ...candidate("Частина міста залишилася без води через аварію", "local-outage"),
       sourceId: "google_news",
       sourceCategory: "general_news",
     },
     {
-      ...candidate("РќР° РѕРґРЅС–Р№ РІСѓР»РёС†С– РєС–Р»СЊРєР° РіРѕРґРёРЅ РЅРµ Р±СѓРґРµ РІРѕРґРё С‡РµСЂРµР· РїР»Р°РЅРѕРІРёР№ СЂРµРјРѕРЅС‚", "one-street"),
+      ...candidate("На одній вулиці кілька годин не буде води через плановий ремонт", "one-street"),
       sourceId: "google_news",
       sourceCategory: "general_news",
     },
@@ -219,11 +220,11 @@ test("international smart water and wastewater technology title is accepted with
 });
 
 test("pipeline still journals OpenAI errors for valid articles", async () => {
-  const item = candidate("РЎС‚Р°РЅ РІРѕРґРѕРїСЂРѕРІС–РґРЅРѕС— РјРµСЂРµР¶С– РіСЂРѕРјР°РґРё", "ai-error");
+  const item = candidate("Стан водопровідної мережі громади", "ai-error");
   const saved = [];
   const pipeline = createEditorPipeline({
     discover: async () => [item],
-    extract: async () => ({ ...item, content: "РџРёС‚РЅРµ РІРѕРґРѕРїРѕСЃС‚Р°С‡Р°РЅРЅСЏ. ".repeat(30), sourceTrusted: true, extractionStatus: "ok" }),
+    extract: async () => ({ ...item, content: "Питне водопостачання. ".repeat(30), sourceTrusted: true, extractionStatus: "ok" }),
     classify: async () => { throw new Error("quota exceeded"); },
     repository: {
       listForDedup: async () => [],

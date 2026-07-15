@@ -1,4 +1,4 @@
-import { createUpdateHandler, runPolling } from "./bot.js";
+import { createUpdateHandler, runPolling, sendDailyDigest } from "./bot.js";
 import { classifyArticle } from "./ai.js";
 import { discoverAllSources, extractArticle } from "./collector.js";
 import { getConfig, loadEnvironmentFile } from "./config.js";
@@ -11,6 +11,7 @@ import {
 import { scheduleDaily } from "./scheduler.js";
 import { createTelegramClient } from "./telegram.js";
 import { prepareMaterialDisplayTitle } from "./translation.js";
+import { prepareMaterialContext } from "./context.js";
 
 loadEnvironmentFile();
 const config = getConfig();
@@ -31,6 +32,11 @@ const publisher = createAutoPublisher({
   dryRun: config.dryRun,
   prepareDisplayTitle: (material) =>
     prepareMaterialDisplayTitle(material, {
+      apiKey: config.openAiApiKey,
+      model: config.openAiModel,
+    }),
+  prepareContext: (material) =>
+    prepareMaterialContext(material, {
       apiKey: config.openAiApiKey,
       model: config.openAiModel,
     }),
@@ -63,6 +69,11 @@ const handleUpdate = createUpdateHandler({
       apiKey: config.openAiApiKey,
       model: config.openAiModel,
     }),
+  prepareContext: (material) =>
+    prepareMaterialContext(material, {
+      apiKey: config.openAiApiKey,
+      model: config.openAiModel,
+    }),
 });
 
 const controller = new AbortController();
@@ -80,12 +91,37 @@ const stopReportScheduler = scheduleDaily(
     }),
   config.dailyReportHourUtc,
 );
+const stopDigestScheduler = config.dailyDigestEnabled
+  ? scheduleDaily(
+    () =>
+      sendDailyDigest({
+        repository,
+        telegram,
+        channelId: config.dailyDigestPublishToChannel
+          ? config.publishChatId
+          : config.adminTelegramId,
+        prepareDisplayTitle: (material) =>
+          prepareMaterialDisplayTitle(material, {
+            apiKey: config.openAiApiKey,
+            model: config.openAiModel,
+          }),
+        prepareContext: (material) =>
+          prepareMaterialContext(material, {
+            apiKey: config.openAiApiKey,
+            model: config.openAiModel,
+          }),
+      }),
+    config.dailyDigestHourUtc,
+    { minuteUtc: config.dailyDigestMinuteUtc },
+  )
+  : () => {};
 publisher.kick();
 
 for (const event of ["SIGINT", "SIGTERM"]) {
   process.once(event, () => {
     stopScheduler();
     stopReportScheduler();
+    stopDigestScheduler();
     controller.abort();
   });
 }

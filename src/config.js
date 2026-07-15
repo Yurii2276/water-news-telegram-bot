@@ -101,6 +101,30 @@ export function getConfig(env = process.env) {
       0,
       23,
     ),
+    dailyDigestEnabled: booleanValue(
+      env.DAILY_DIGEST_ENABLED,
+      true,
+      "DAILY_DIGEST_ENABLED",
+    ),
+    dailyDigestHourUtc: integerInRange(
+      env.DAILY_DIGEST_HOUR_UTC,
+      13,
+      "DAILY_DIGEST_HOUR_UTC",
+      0,
+      23,
+    ),
+    dailyDigestMinuteUtc: integerInRange(
+      env.DAILY_DIGEST_MINUTE_UTC,
+      40,
+      "DAILY_DIGEST_MINUTE_UTC",
+      0,
+      59,
+    ),
+    dailyDigestPublishToChannel: booleanValue(
+      env.DAILY_DIGEST_PUBLISH_TO_CHANNEL,
+      true,
+      "DAILY_DIGEST_PUBLISH_TO_CHANNEL",
+    ),
     maxDailyPublications: integerInRange(
       env.MAX_DAILY_PUBLICATIONS,
       10,

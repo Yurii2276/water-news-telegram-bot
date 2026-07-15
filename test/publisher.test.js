@@ -10,9 +10,9 @@ import { prepareMaterialDisplayTitle } from "../src/translation.js";
 function queuedMaterial(id = 1) {
   return {
     id,
-    title: "РџРµСЂРµРІС–СЂРµРЅР° РЅРѕРІРёРЅР°",
+    title: "Перевірена новина",
     url: "https://www.davr.gov.ua/news/test",
-    source_name: "Р”РµСЂР¶РІРѕРґР°РіРµРЅС‚СЃС‚РІРѕ",
+    source_name: "Держводагентство",
     ai_decision: {
       relevant: true,
       relevanceScore: 95,
@@ -20,9 +20,9 @@ function queuedMaterial(id = 1) {
       confidenceScore: 92,
       category: "water_supply",
       importance: 80,
-      summary: "РџРµСЂРµРІС–СЂРµРЅРµ СЂРµР·СЋРјРµ.",
-      whyImportant: "РџРµСЂРµРІС–СЂРµРЅРµ РїРѕСЏСЃРЅРµРЅРЅСЏ.",
-      hashtags: ["#РІРѕРґР°"],
+      summary: "Перевірене резюме.",
+      whyImportant: "Перевірене пояснення.",
+      hashtags: ["#вода"],
     },
   };
 }
@@ -78,17 +78,17 @@ test("Telegram publication uses Ukrainian display title and keeps source and URL
     verifySource: async () => ({ verified: true }),
     prepareDisplayTitle: async (material) => ({
       ...material,
-      displayTitleUk: "РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё",
+      displayTitleUk: "Технологія smart water для виявлення витоків скорочує втрати води",
     }),
     sleep: async () => {},
   });
 
   await publisher.drain();
 
-  assert.match(sent[0][1], /РўРµС…РЅРѕР»РѕРіС–СЏ smart water РґР»СЏ РІРёСЏРІР»РµРЅРЅСЏ РІРёС‚РѕРєС–РІ СЃРєРѕСЂРѕС‡СѓС” РІС‚СЂР°С‚Рё РІРѕРґРё/);
+  assert.match(sent[0][1], /Технологія smart water для виявлення витоків скорочує втрати води/);
   assert.doesNotMatch(sent[0][1], /Global smart water leak detection/);
-  assert.match(sent[0][1], /Р”Р¶РµСЂРµР»Рѕ: WaterWorld/);
-  assert.match(sent[0][1], /рџ”— https:\/\/example\.com\/smart-water/);
+  assert.match(sent[0][1], /Джерело: WaterWorld/);
+  assert.match(sent[0][1], /🔗 <a href="https:\/\/example\.com\/smart-water">Читати джерело<\/a>/);
   assert.equal(statuses[0][1], "published");
 });
 
