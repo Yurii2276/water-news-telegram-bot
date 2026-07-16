@@ -22,3 +22,11 @@ test("invalid DRY_RUN value is rejected", () => {
     /DRY_RUN must be true or false/,
   );
 });
+
+test("empty scan retry defaults are enabled", () => {
+  const config = getConfig(required);
+  assert.equal(config.emptyScanRetryEnabled, true);
+  assert.equal(config.emptyScanRetryMinutes, 60);
+  assert.equal(config.emptyScanMaxRetries, 2);
+  assert.equal(config.emptyScanAdminNotification, true);
+});
