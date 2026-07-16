@@ -125,6 +125,28 @@ export function getConfig(env = process.env) {
       true,
       "DAILY_DIGEST_PUBLISH_TO_CHANNEL",
     ),
+    emptyScanRetryEnabled: booleanValue(
+      env.EMPTY_SCAN_RETRY_ENABLED,
+      true,
+      "EMPTY_SCAN_RETRY_ENABLED",
+    ),
+    emptyScanRetryMinutes: positiveInteger(
+      env.EMPTY_SCAN_RETRY_MINUTES,
+      60,
+      "EMPTY_SCAN_RETRY_MINUTES",
+    ),
+    emptyScanMaxRetries: integerInRange(
+      env.EMPTY_SCAN_MAX_RETRIES,
+      2,
+      "EMPTY_SCAN_MAX_RETRIES",
+      1,
+      10,
+    ),
+    emptyScanAdminNotification: booleanValue(
+      env.EMPTY_SCAN_ADMIN_NOTIFICATION,
+      true,
+      "EMPTY_SCAN_ADMIN_NOTIFICATION",
+    ),
     maxDailyPublications: integerInRange(
       env.MAX_DAILY_PUBLICATIONS,
       10,

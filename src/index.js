@@ -4,6 +4,7 @@ import { discoverAllSources, extractArticle } from "./collector.js";
 import { getConfig, loadEnvironmentFile } from "./config.js";
 import { createDatabase } from "./db.js";
 import { createEditorPipeline } from "./editor.js";
+import { createEmptyScanRetryController } from "./emptyScanRetry.js";
 import {
   createAutoPublisher,
   sendDailyTechnicalReport,
@@ -77,8 +78,18 @@ const handleUpdate = createUpdateHandler({
 });
 
 const controller = new AbortController();
+const morningScan = createEmptyScanRetryController({
+  scan: () => pipeline.scan(),
+  onQueued: () => publisher.kick(),
+  telegram,
+  adminTelegramId: config.adminTelegramId,
+  enabled: config.emptyScanRetryEnabled,
+  retryMinutes: config.emptyScanRetryMinutes,
+  maxRetries: config.emptyScanMaxRetries,
+  adminNotification: config.emptyScanAdminNotification,
+});
 const stopScheduler = scheduleDaily(
-  () => pipeline.scan(),
+  () => morningScan.runScheduledScan(),
   config.dailyScanHourUtc,
 );
 const stopReportScheduler = scheduleDaily(
@@ -122,6 +133,7 @@ for (const event of ["SIGINT", "SIGTERM"]) {
     stopScheduler();
     stopReportScheduler();
     stopDigestScheduler();
+    morningScan.reset();
     controller.abort();
   });
 }

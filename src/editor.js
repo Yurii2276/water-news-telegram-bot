@@ -19,6 +19,10 @@ function createReport(discovered) {
     normative_act: 0,
     google_news_resolved_url: 0,
     google_news_unresolved_url: 0,
+    source_fetch_failures: 0,
+    transient_retries: 0,
+    google_queries_executed: 0,
+    scheduled_retry_attempt: 0,
     categories: Object.fromEntries(SOURCE_CATEGORIES.map((category) => [category, 0])),
     priorities: Object.fromEntries(PRIORITY_LEVELS.map((priority) => [priority, 0])),
     rejectedBy: {
@@ -110,6 +114,7 @@ export function createEditorPipeline({
       const candidates = await discover();
       const existing = await repository.listForDedup();
       const report = createReport(candidates.length);
+      Object.assign(report, candidates.diagnostics ?? {});
 
       for (const candidate of candidates) {
         if (!candidate?.url) {
