@@ -1,12 +1,16 @@
+import { factualExtract, publicCategoryLabel, uniqueStoryMaterials } from "./editorial.js";
 import { escapeHtml, formatPublication } from "./telegram.js";
 import { titleForDisplay } from "./translation.js";
+import { formatWeeklyAnalysis } from "./weeklyAnalysis.js";
+import { isGoogleNewsUrl } from "./urlResolver.js";
 
 const HELP_MESSAGE = [
   "<b>Команди редактора</b>",
   "/scan — запустити збір і автопублікацію",
   "/retry_failed_publish — повторно поставити в чергу невдалі публікації за 48 годин",
   "/publish_queue_now — вручну запустити публікацію черги",
-  "/daily_digest — підсумок опублікованих і прийнятих матеріалів за добу",
+  "/daily_digest — підсумок дня для водного сектору",
+  "/weekly_analysis — тижневий секторний аналіз",
   "/queue — показати чергу автопублікації",
   "/news — останні опубліковані матеріали",
 ].join("\n");
@@ -15,6 +19,7 @@ const CATEGORY_ORDER = [
   "regulator",
   "government",
   "parliament",
+  "personnel_change",
   "association",
   "vodokanal",
   "local_media",
@@ -27,6 +32,7 @@ const CATEGORY_LABELS = {
   regulator: "regulator",
   government: "government",
   parliament: "parliament",
+  personnel_change: "personnel_change",
   association: "association",
   vodokanal: "vodokanal",
   local_media: "local_media",
@@ -35,52 +41,12 @@ const CATEGORY_LABELS = {
   general_news: "general_news",
 };
 
-const DIGEST_SECTIONS = [
-  {
-    title: "Нормативка / регулювання",
-    matches: (decision) =>
-      decision.normativeAct === true || decision.normative_act === true,
-  },
-  {
-    title: "Регулювання / НКРЕКП / законодавство",
-    matches: (decision) =>
-      ["regulator", "parliament"].includes(decision.materialCategory ?? decision.sourceCategory) ||
-      decision.category === "legislation",
-  },
-  {
-    title: "Тарифи та інвестпрограми",
-    matches: (decision, material) =>
-      decision.category === "tariffs" || /тариф|інвест/i.test(`${material.title} ${material.status_reason ?? ""}`),
-  },
-  {
-    title: "Водоканали та інфраструктура",
-    matches: (decision) =>
-      ["vodokanal", "government", "association"].includes(decision.materialCategory ?? decision.sourceCategory) ||
-      ["utilities", "treatment", "infrastructure"].includes(decision.category),
-  },
-  {
-    title: "Аварії та відключення",
-    matches: (decision, material) =>
-      decision.materialCategory === "local_media" || /без\s+води|відключенн|авар/i.test(material.title ?? ""),
-  },
-  {
-    title: "Відновлення / донори",
-    matches: (decision) =>
-      decision.materialCategory === "donor" || decision.sourceCategory === "donor" || ["recovery", "donors"].includes(decision.category),
-  },
-  {
-    title: "Технології та міжнародна практика",
-    matches: (decision) =>
-      decision.materialCategory === "international_tech" || decision.sourceCategory === "international_tech" || decision.category === "technology",
-  },
-];
-
 function commandFrom(text) {
   return text?.trim().split(/\s+/, 1)[0].toLowerCase().split("@", 1)[0];
 }
 
 function decisionOf(material) {
-  return material.ai_decision ?? material.aiDecision ?? {};
+  return material?.ai_decision ?? material?.aiDecision ?? {};
 }
 
 function priorityValue(material) {
@@ -91,15 +57,16 @@ function priorityValue(material) {
     regulator: 1,
     government: 2,
     parliament: 3,
-    association: 4,
-    donor: 5,
-    international_tech: 6,
-    vodokanal: 7,
-    general_news: 8,
-    local_media: 9,
+    personnel_change: 4,
+    association: 5,
+    donor: 6,
+    international_tech: 7,
+    vodokanal: 8,
+    general_news: 9,
+    local_media: 10,
   };
   const priorityOrder = { high: 0, medium: 1, low: 2 };
-  return (categoryOrder[category] ?? 8) * 10 + (priorityOrder[decision.priorityLevel] ?? 1);
+  return (categoryOrder[category] ?? 9) * 10 + (priorityOrder[decision.priorityLevel] ?? 1);
 }
 
 export function formatScanReport(report) {
@@ -149,46 +116,44 @@ export function formatScanReport(report) {
   return lines.join("\n").slice(0, 4096);
 }
 
-function formatDigestItem(material, index) {
-  const decision = decisionOf(material);
-  const score = decision.priorityLevel ? ` · ${decision.priorityLevel}` : "";
-  return `${index}. ${escapeHtml(titleForDisplay(material))} — ${escapeHtml(material.source_name ?? material.sourceName ?? "джерело")}${score}`;
-}
-
 export function formatDailyDigest(materials) {
-  const important = materials
-    .filter((material) => {
-      const decision = decisionOf(material);
-      return decision.priorityLevel === "high" ||
-        decision.normativeAct === true ||
-        decision.normative_act === true ||
-        ["regulator", "government", "parliament", "association", "donor", "international_tech"].includes(decision.materialCategory ?? decision.sourceCategory);
-    })
-    .sort((left, right) => priorityValue(left) - priorityValue(right));
+  const important = uniqueStoryMaterials(
+    materials
+      .filter((material) => {
+        const decision = decisionOf(material);
+        return decision.priorityLevel !== "low" ||
+          decision.normativeAct === true ||
+          decision.normative_act === true ||
+          ["regulator", "government", "parliament", "association", "donor", "international_tech", "personnel_change", "vodokanal"].includes(decision.materialCategory ?? decision.sourceCategory);
+      })
+      .sort((left, right) => priorityValue(left) - priorityValue(right)),
+    5,
+  );
+
   const lines = [
-    "💧 <b>Вода UA: підсумок дня</b>",
+    "💧 <b>Вода UA: головне за день</b>",
     "",
     important.length
-      ? `За день відібрано ${important.length} важливих повідомлень для водного сектору. Нижче — ключові оновлення за пріоритетами.`
-      : "Станом на сьогодні суттєвих регуляторних або галузевих змін не виявлено. У стрічці переважали локальні повідомлення щодо відключень та ремонтів.",
+      ? `За добу відібрано ${important.length} ключових сюжетів для водного сектору.`
+      : "За добу немає достатньо підтверджених матеріалів для дайджесту.",
   ];
-  const used = new Set();
 
-  for (const section of DIGEST_SECTIONS) {
-    const sectionMaterials = materials
-      .filter((material) => !used.has(material.id) && section.matches(decisionOf(material), material))
-      .sort((left, right) => priorityValue(left) - priorityValue(right))
-      .slice(0, 7);
-    sectionMaterials.forEach((material) => used.add(material.id));
-    lines.push("", `<b>${section.title}</b>`);
-    if (sectionMaterials.length === 0) {
-      lines.push("Немає важливих повідомлень.");
-    } else {
-      lines.push(...sectionMaterials.map((material, index) => formatDigestItem(material, index + 1)));
-    }
+  for (const [index, material] of important.entries()) {
+    const source = material.source_name ?? material.sourceName ?? "джерело";
+    const extract = factualExtract(material);
+    const category = publicCategoryLabel(material);
+    lines.push(
+      "",
+      `${index + 1}. <b>${escapeHtml(titleForDisplay(material))}</b>`,
+      category ? `   ${escapeHtml(category)}` : null,
+      `   Джерело: ${escapeHtml(source)}${material.url && !isGoogleNewsUrl(material.url) ? ` — ${escapeHtml(material.url)}` : ""}`,
+      extract ? `   Факт: ${escapeHtml(extract)}` : null,
+    );
   }
 
-  return lines.join("\n").slice(0, 4096);
+  lines.push("", "Висновок: фокус дня — підтверджені першоджерелами рішення, інфраструктура та технології без дублювання однотипних локальних повідомлень.");
+
+  return lines.filter((line) => line !== null).join("\n").slice(0, 4096);
 }
 
 async function prepareDigestMaterials(materials, prepareDisplayTitle, prepareContext) {
@@ -252,13 +217,18 @@ export function createUpdateHandler({
       await telegram.sendMessage(chatId, formatDailyDigest(await prepareDigestMaterials(materials, prepareDisplayTitle, prepareContext)));
       return;
     }
+    if (command === "/weekly_analysis") {
+      const materials = await repository.getWeeklyAnalysisMaterials();
+      await telegram.sendMessage(chatId, formatWeeklyAnalysis(await prepareDigestMaterials(materials, prepareDisplayTitle, prepareContext)));
+      return;
+    }
     if (command === "/queue") {
       const materials = await repository.getQueue(20);
       if (materials.length === 0) await telegram.sendMessage(chatId, "Черга автопублікації порожня.");
       else {
         const rows = materials.map((material) => {
           const decision = decisionOf(material);
-          return `#${material.id} · ${escapeHtml(material.title)} · ${decision.priorityLevel ?? "medium"} · ${decision.relevanceScore ?? "?"}%/${decision.confidenceScore ?? "?"}%`;
+          return `#${material.id} · ${escapeHtml(titleForDisplay(material))} · ${decision.priorityLevel ?? "medium"} · ${decision.relevanceScore ?? "?"}%/${decision.confidenceScore ?? "?"}%`;
         });
         await telegram.sendMessage(chatId, `<b>Черга автопублікації</b>\n\n${rows.join("\n")}`);
       }

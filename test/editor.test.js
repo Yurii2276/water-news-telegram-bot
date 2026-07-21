@@ -46,7 +46,7 @@ test("saveRejected skips database write without valid URL", async () => {
   assert.equal(writes, 0);
 });
 
-test("strong water-sector titles queue without extraction or OpenAI", async () => {
+test("strong water-sector titles queue with pragmatic extraction attempt and without OpenAI", async () => {
   const items = [
     candidate("Куб понад 100 гривень: хочуть підвищити тариф на воду", "tariff"),
     candidate("Частина Одеси залишилася без води", "outage"),
@@ -71,7 +71,7 @@ test("strong water-sector titles queue without extraction or OpenAI", async () =
   assert.equal(report.queued, 4);
   assert.equal(report.accepted_title_keyword_fallback, 4);
   assert.equal(report.rejected, 0);
-  assert.equal(extracts, 0);
+  assert.equal(extracts, 4);
   assert.equal(classifications, 0);
   assert.ok(saved.every((material) => material.status === "queued"));
   assert.ok(saved.every((material) => material.aiDecision.titleKeywordFallback));
@@ -108,9 +108,9 @@ test("fallback Telegram post uses title, source, URL and optional snippet", () =
   assert.match(text, /Тарифи на воду змінилися/);
   assert.match(text, /Приклад джерела/);
   assert.match(text, /https:\/\/example\.com\/water/);
-  assert.match(text, /💧 <b>Новини сектору<\/b>/);
-  assert.match(text, /🔗 <a href="https:\/\/example\.com\/water">Читати джерело<\/a>/);
-  assert.match(text, /Матеріал стосується водного сектору/);
+  assert.match(text, /💧 <b>Водна безпека<\/b>/);
+  assert.match(text, /🔗 <a href="https:\/\/example\.com\/water">https:\/\/example\.com\/water<\/a>/);
+  assert.doesNotMatch(text, /Матеріал стосується водного сектору/);
   assert.doesNotMatch(text, /Чому це важливо/);
 });
 

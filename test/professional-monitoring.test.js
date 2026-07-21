@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { getConfig } from "../src/config.js";
-import { fallbackProfessionalContext, prepareMaterialContext } from "../src/context.js";
+import { prepareMaterialContext } from "../src/context.js";
 import { createDatabase } from "../src/db.js";
 import { formatPublication } from "../src/telegram.js";
 import { classifyMaterialProfile } from "../src/topics.js";
@@ -19,10 +19,10 @@ test("Telegram publication does not expose long Google News RSS URL and uses hyp
   });
 
   assert.doesNotMatch(text, /news\.google\.com\/rss\/articles/);
-  assert.match(text, /<a href="https:\/\/example\.com\/source">Читати джерело<\/a>/);
+  assert.match(text, /<a href="https:\/\/example\.com\/source">https:\/\/example\.com\/source<\/a>/);
 });
 
-test("post includes fallback professional context when OpenAI context generation fails", async () => {
+test("post suppresses generic professional context when OpenAI context generation fails", async () => {
   const material = await prepareMaterialContext(
     {
       title: "НКРЕКП схвалила тариф на централізоване водопостачання",
@@ -41,8 +41,8 @@ test("post includes fallback professional context when OpenAI context generation
     },
   );
 
-  assert.equal(material.professionalContextUk, fallbackProfessionalContext(material));
-  assert.match(formatPublication({ ...material, url: "https://example.com" }), /регулювання водопостачання/);
+  assert.equal(material.professionalContextUk, "");
+  assert.doesNotMatch(formatPublication({ ...material, url: "https://example.com" }), /регулювання водопостачання/);
 });
 
 test("official regulatory items are normative acts and high priority", () => {
@@ -88,7 +88,7 @@ test("publication queue SQL orders normative and official items before local out
   assert.match(source, /WHEN 'local_media' THEN 9/);
 });
 
-test("scheduled digest config supports 16:40 Kyiv via 13:40 UTC defaults", () => {
+test("scheduled digest config supports 16:40 Europe/Kyiv local defaults", () => {
   const config = getConfig({
     TELEGRAM_BOT_TOKEN: "token",
     ADMIN_TELEGRAM_ID: "42",
@@ -99,8 +99,9 @@ test("scheduled digest config supports 16:40 Kyiv via 13:40 UTC defaults", () =>
   const now = new Date("2026-07-15T13:39:00Z");
 
   assert.equal(config.dailyDigestEnabled, true);
-  assert.equal(config.dailyDigestHourUtc, 13);
-  assert.equal(config.dailyDigestMinuteUtc, 40);
+  assert.equal(config.dailyDigestTimezone, "Europe/Kyiv");
+  assert.equal(config.dailyDigestLocalHour, 16);
+  assert.equal(config.dailyDigestLocalMinute, 40);
   assert.equal(millisecondsUntilTimeUtc(13, 40, now), 60_000);
 });
 

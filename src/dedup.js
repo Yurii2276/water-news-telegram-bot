@@ -61,11 +61,16 @@ export function contentHash(value) {
 export function findDuplicate(candidate, existing, threshold = 0.82) {
   const url = normalizeUrl(candidate.url);
   const title = normalizeTitle(candidate.title);
+  const storyKey = candidate.storyKey ?? candidate.story_key ?? null;
 
   for (const item of existing) {
     const existingUrl = normalizeUrl(item.url);
+    const existingStoryKey = item.storyKey ?? item.story_key ?? null;
     if (url && existingUrl && existingUrl === url) {
       return { duplicate: true, reason: "url", material: item };
+    }
+    if (storyKey && existingStoryKey && storyKey === existingStoryKey) {
+      return { duplicate: true, reason: "story", material: item };
     }
     if (normalizeTitle(item.title) === title) {
       return { duplicate: true, reason: "title", material: item };

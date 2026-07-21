@@ -8,6 +8,7 @@ import {
   preliminaryFilter,
   titleKeywordFallback,
 } from "./topics.js";
+import { createStoryKey, inferSourceQuality, factualExtract } from "./editorial.js";
 
 function createReport(discovered) {
   return {
@@ -87,7 +88,44 @@ function fallbackDecision(candidate, keyword, preliminaryCategories = []) {
     hashtags: ["#вода"],
     titleKeywordFallback: true,
     fallbackKeyword: keyword,
+    contextBasis: snippet ? "rss_snippet" : "title_only",
   }, candidate, preliminaryCategories);
+}
+
+async function extractForFallback(candidate, extract, logger) {
+  try {
+    const article = await extract(candidate);
+    if (article?.extractionStatus === "ok") return { ...article, contextBasis: "source_excerpt" };
+    return {
+      ...candidate,
+      ...(article ?? {}),
+      title: article?.title || candidate.title,
+      url: article?.url || candidate.url,
+      content: String(candidate.summary ?? candidate.snippet ?? "").trim(),
+      extractionStatus: article?.extractionStatus ?? "fallback_without_extraction",
+      contextBasis: candidate.summary || candidate.snippet ? "rss_snippet" : "title_only",
+      sourceTrusted: article?.sourceTrusted ?? candidate.sourceTrusted ?? false,
+    };
+  } catch (error) {
+    logger.warn?.(`Fallback extraction failed: ${candidate.url}`, error);
+    return {
+      ...candidate,
+      content: String(candidate.summary ?? candidate.snippet ?? "").trim(),
+      extractionStatus: "fallback_extraction_error",
+      contextBasis: candidate.summary || candidate.snippet ? "rss_snippet" : "title_only",
+      sourceTrusted: candidate.sourceTrusted ?? false,
+    };
+  }
+}
+
+function enrichMaterialForStorage(material, aiDecision = undefined) {
+  return {
+    ...material,
+    storyKey: material.storyKey ?? material.story_key ?? createStoryKey(material),
+    sourceQuality: material.sourceQuality ?? material.source_quality ?? inferSourceQuality(material),
+    contextBasis: material.contextBasis ?? material.context_basis ?? aiDecision?.contextBasis ?? (material.content ? "source_excerpt" : "title_only"),
+    professionalContextUk: material.professionalContextUk ?? factualExtract(material),
+  };
 }
 
 export async function saveRejected(repository, material, status, reason, categories = []) {
@@ -141,20 +179,26 @@ export function createEditorPipeline({
 
         const fallback = titleKeywordFallback(candidate.title);
         if (fallback.accepted) {
-          const decision = fallbackDecision(candidate, fallback.keyword, initialFilter.categories);
-          const snippet = String(candidate.summary ?? candidate.snippet ?? "").trim();
+          const fallbackArticle = await extractForFallback(candidate, extract, logger);
+          const decision = fallbackDecision(fallbackArticle, fallback.keyword, initialFilter.categories);
+          const material = enrichMaterialForStorage(fallbackArticle, decision);
+          const storyDuplicate = findDuplicate(material, existing);
+          if (storyDuplicate.duplicate) {
+            await saveRejected(repository, material, "duplicate", `Duplicate by ${storyDuplicate.reason}`, initialFilter.categories);
+            report.duplicates += 1;
+            continue;
+          }
           const saved = await repository.saveMaterial({
-            ...candidate,
-            content: snippet,
+            ...material,
             status: "queued",
             statusReason: `Accepted by title keyword fallback: ${fallback.keyword}`,
             preliminaryCategories: initialFilter.categories,
             aiDecision: decision,
           });
-          existing.push(candidate);
+          existing.push(material);
           report.queued += 1;
           report.accepted_title_keyword_fallback += 1;
-          recordAccepted(report, candidate, initialFilter.categories);
+          recordAccepted(report, material, initialFilter.categories);
           await onQueued(saved);
           continue;
         }
@@ -219,7 +263,7 @@ export function createEditorPipeline({
         }
 
         const saved = await repository.saveMaterial({
-          ...article,
+          ...enrichMaterialForStorage(article, decision),
           status: decision.relevant ? "queued" : "rejected_ai",
           statusReason: decision.rejectionReason || null,
           preliminaryCategories: contentFilter.categories,

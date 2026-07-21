@@ -1,6 +1,7 @@
 import pg from "pg";
 
 import { contentHash, isValidHttpUrl, normalizeTitle, normalizeUrl } from "./dedup.js";
+import { createStoryKey, inferSourceQuality } from "./editorial.js";
 
 const { Pool } = pg;
 const FAILED_PUBLICATION_STATUSES = new Set(["rejected_publish", "publish_failed"]);
@@ -57,27 +58,40 @@ export function createDatabase(databaseUrl) {
         ALTER TABLE materials ADD COLUMN IF NOT EXISTS publish_attempts INTEGER NOT NULL DEFAULT 0;
         ALTER TABLE materials ADD COLUMN IF NOT EXISTS last_publish_error TEXT;
         ALTER TABLE materials ADD COLUMN IF NOT EXISTS next_publish_at TIMESTAMPTZ;
+        ALTER TABLE materials ADD COLUMN IF NOT EXISTS story_key TEXT;
+        ALTER TABLE materials ADD COLUMN IF NOT EXISTS source_quality TEXT;
+        ALTER TABLE materials ADD COLUMN IF NOT EXISTS context_basis TEXT;
+        ALTER TABLE materials ADD COLUMN IF NOT EXISTS professional_context_uk TEXT;
+        CREATE INDEX IF NOT EXISTS materials_story_key_idx ON materials(story_key);
+        CREATE INDEX IF NOT EXISTS materials_source_quality_idx ON materials(source_quality);
       `);
     },
 
     async listForDedup(limit = 1000) {
       const { rows } = await pool.query(
-        `SELECT id, url, title, content FROM materials ORDER BY id DESC LIMIT $1`,
+        `SELECT id, url, title, content, story_key FROM materials ORDER BY id DESC LIMIT $1`,
         [limit],
       );
       return rows;
     },
 
     async saveMaterial(material) {
+      const storyKey = material.storyKey ?? material.story_key ?? createStoryKey(material);
+      const sourceQuality = material.sourceQuality ?? material.source_quality ?? inferSourceQuality(material);
       const { rows } = await pool.query(
         `INSERT INTO materials (
            source_id, source_name, discovery_method, url, normalized_url,
            title, normalized_title, content, content_hash, status,
-           status_reason, preliminary_categories, ai_decision
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+           status_reason, preliminary_categories, ai_decision, story_key,
+           source_quality, context_basis, professional_context_uk
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
          ON CONFLICT (normalized_url) DO UPDATE SET
            updated_at = NOW(),
-           status_reason = EXCLUDED.status_reason
+           status_reason = EXCLUDED.status_reason,
+           story_key = COALESCE(materials.story_key, EXCLUDED.story_key),
+           source_quality = COALESCE(materials.source_quality, EXCLUDED.source_quality),
+           context_basis = COALESCE(materials.context_basis, EXCLUDED.context_basis),
+           professional_context_uk = COALESCE(materials.professional_context_uk, EXCLUDED.professional_context_uk)
          RETURNING *`,
         [
           material.sourceId,
@@ -93,6 +107,10 @@ export function createDatabase(databaseUrl) {
           material.statusReason ?? null,
           JSON.stringify(material.preliminaryCategories ?? []),
           material.aiDecision ? JSON.stringify(material.aiDecision) : null,
+          storyKey,
+          sourceQuality,
+          material.contextBasis ?? material.context_basis ?? null,
+          material.professionalContextUk ?? material.professional_context_uk ?? null,
         ],
       );
       return rows[0];
@@ -109,6 +127,7 @@ export function createDatabase(databaseUrl) {
              WHEN 'regulator' THEN 1
              WHEN 'government' THEN 2
              WHEN 'parliament' THEN 3
+             WHEN 'personnel_change' THEN 4
              WHEN 'association' THEN 4
              WHEN 'donor' THEN 5
              WHEN 'international_tech' THEN 6
@@ -244,6 +263,33 @@ export function createDatabase(databaseUrl) {
            (ai_decision->>'priorityScore')::int DESC NULLS LAST,
            updated_at DESC
          LIMIT 60`,
+      );
+      return rows;
+    },
+
+    async getWeeklyAnalysisMaterials() {
+      const { rows } = await pool.query(
+        `SELECT * FROM materials
+         WHERE status IN ('published', 'queued', 'dry_run')
+           AND updated_at >= NOW() - INTERVAL '7 days'
+         ORDER BY
+           CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
+           CASE COALESCE(ai_decision->>'materialCategory', ai_decision->>'sourceCategory')
+             WHEN 'regulator' THEN 1
+             WHEN 'government' THEN 2
+             WHEN 'parliament' THEN 3
+             WHEN 'personnel_change' THEN 4
+             WHEN 'association' THEN 5
+             WHEN 'donor' THEN 6
+             WHEN 'international_tech' THEN 7
+             WHEN 'vodokanal' THEN 8
+             WHEN 'general_news' THEN 9
+             WHEN 'local_media' THEN 10
+             ELSE 9
+           END,
+           (ai_decision->>'priorityScore')::int DESC NULLS LAST,
+           updated_at DESC
+         LIMIT 120`,
       );
       return rows;
     },

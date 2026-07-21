@@ -1,4 +1,5 @@
 import { isValidHttpUrl } from "./dedup.js";
+import { isSignificantLocalIncident } from "./editorial.js";
 import { sourceForUrl } from "./sources.js";
 import { formatPublication } from "./telegram.js";
 
@@ -50,6 +51,8 @@ export function createAutoPublisher({
   telegram,
   channelId,
   maxDaily = 10,
+  editorialCap = 7,
+  maxLocalIncidents = 2,
   intervalMs = 15 * 60 * 1000,
   maxRetries = 3,
   dryRun = true,
@@ -105,18 +108,26 @@ export function createAutoPublisher({
     let publishedToday = await repository.countPublishedToday();
     let publishedNow = 0;
     let simulatedNow = 0;
+    let localIncidentsNow = 0;
+    const effectiveLimit = Math.min(maxDaily, editorialCap);
 
-    while (publishedToday < maxDaily) {
-      const [material] = await repository.getQueue(1);
+    while (publishedToday < effectiveLimit) {
+      const queue = await repository.getQueue(10);
+      const material = queue.find((item) => {
+        if (!isSignificantLocalIncident(item)) return true;
+        return localIncidentsNow < maxLocalIncidents;
+      });
       if (!material) break;
 
       const outcome = await publishWithRetries(material);
       if (outcome === "published") {
         publishedToday += 1;
         publishedNow += 1;
-        if (publishedToday < maxDaily) await sleep(intervalMs);
+        if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
+        if (publishedToday < effectiveLimit) await sleep(intervalMs);
       } else if (outcome === "dry_run") {
         simulatedNow += 1;
+        if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
       }
     }
 
@@ -124,7 +135,9 @@ export function createAutoPublisher({
       publishedNow,
       simulatedNow,
       publishedToday,
-      limit: maxDaily,
+      limit: effectiveLimit,
+      configuredMaxDaily: maxDaily,
+      editorialCap,
       dryRun,
     };
   }

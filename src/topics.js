@@ -19,6 +19,7 @@ export const SOURCE_CATEGORIES = [
   "government",
   "parliament",
   "association",
+  "personnel_change",
   "vodokanal",
   "local_media",
   "donor",
@@ -308,6 +309,9 @@ export function inferMaterialCategory(material, preliminaryCategories = []) {
   const sourceCategory = inferSourceCategory(material);
   if (sourceCategory !== "general_news") return sourceCategory;
   const text = textOf(material);
+  if (/(признач|звільн|керівник|директор|CEO|chief executive|appointed|resigned)/iu.test(text) && /(водоканал|water utility|water sector|НКРЕКП|nerc)/iu.test(text)) {
+    return "personnel_change";
+  }
   if (/smart water|wastewater treatment|wastewater technology|water supply technology|water supply infrastructure|non[- ]revenue water|leak detection|sludge treatment|digital water|desalination/i.test(text)) {
     return "international_tech";
   }

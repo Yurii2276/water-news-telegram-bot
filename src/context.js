@@ -1,4 +1,5 @@
 import { needsUkrainianTitle } from "./translation.js";
+import { factualExtract, validatePublicContext } from "./editorial.js";
 
 function decisionOf(material) {
   return material?.ai_decision ?? material?.aiDecision ?? {};
@@ -51,11 +52,11 @@ function responseText(payload) {
 }
 
 export function fallbackProfessionalContext(material) {
-  return FALLBACK_CONTEXTS_UK[materialCategory(material)] ?? FALLBACK_CONTEXTS_UK.general_news;
+  return factualExtract(material);
 }
 
 export function contextForDisplay(material) {
-  return trimContext(
+  const context = trimContext(
     material?.professionalContextUk ??
     material?.professional_context_uk ??
     material?.aiDecision?.professionalContextUk ??
@@ -66,6 +67,7 @@ export function contextForDisplay(material) {
     material?.ai_decision?.summary ??
     fallbackProfessionalContext(material),
   );
+  return validatePublicContext(context, material) ? context : "";
 }
 
 export async function generateProfessionalContext(
@@ -109,11 +111,8 @@ export async function generateProfessionalContext(
       throw new Error(`OpenAI API error ${response.status}: ${payload.error?.message ?? "unknown"}`);
     }
     const context = trimContext(responseText(payload));
-    return {
-      context: context || fallbackProfessionalContext(material),
-      generated: Boolean(context),
-      failed: !context,
-    };
+    const validContext = validatePublicContext(context, material) ? context : fallbackProfessionalContext(material);
+    return { context: validContext, generated: Boolean(validContext && context === validContext), failed: !validContext };
   } catch (error) {
     logger.warn?.("Professional context generation failed", error);
     return { context: fallbackProfessionalContext(material), generated: false, failed: true };
@@ -126,10 +125,12 @@ export async function prepareMaterialContext(material, options = {}) {
   const decision = decisionOf(material);
   const deterministic = decision.titleKeywordFallback || decision.priorityLevel || decision.materialCategory;
   if (deterministic && !options.forceOpenAiContext) {
+    const context = fallbackProfessionalContext(material);
     return {
       ...material,
-      professionalContextUk: fallbackProfessionalContext(material),
-      contextGeneration: { generated: false, failed: false },
+      professionalContextUk: context,
+      contextBasis: context ? (material?.content ? "source_excerpt" : "rss_snippet") : "title_only",
+      contextGeneration: { generated: false, failed: !context },
     };
   }
 
