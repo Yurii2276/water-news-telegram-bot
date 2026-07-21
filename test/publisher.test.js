@@ -88,7 +88,7 @@ test("Telegram publication uses Ukrainian display title and keeps source and URL
   assert.match(sent[0][1], /Технологія smart water для виявлення витоків скорочує втрати води/);
   assert.doesNotMatch(sent[0][1], /Global smart water leak detection/);
   assert.match(sent[0][1], /Джерело: WaterWorld/);
-  assert.match(sent[0][1], /🔗 <a href="https:\/\/example\.com\/smart-water">Читати джерело<\/a>/);
+  assert.match(sent[0][1], /🔗 <a href="https:\/\/example\.com\/smart-water">https:\/\/example\.com\/smart-water<\/a>/);
   assert.equal(statuses[0][1], "published");
 });
 
@@ -128,7 +128,7 @@ test("OpenAI translation failure does not crash publishing", async () => {
   const result = await publisher.drain();
 
   assert.equal(result.publishedNow, 1);
-  assert.match(sent[0][1], /Smart water infrastructure funding announced/);
+  assert.match(sent[0][1], /Технології smart water для зменшення втрат води/);
 });
 
 test("publisher retries and journals terminal failure", async () => {

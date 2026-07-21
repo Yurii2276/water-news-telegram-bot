@@ -64,7 +64,7 @@ test("English/Latin title gets Ukrainian display title", async () => {
   assert.equal(titleForDisplay(prepared), prepared.displayTitleUk);
 });
 
-test("OpenAI translation failure falls back to original title", async () => {
+test("OpenAI translation failure falls back gracefully without crash", async () => {
   const warnings = [];
   const result = await translateTitleToUkrainian("Smart water infrastructure funding announced", {
     apiKey: "test-key",
@@ -76,8 +76,8 @@ test("OpenAI translation failure falls back to original title", async () => {
     logger: { warn: (...args) => warnings.push(args) },
   });
 
-  assert.equal(result.title, "Smart water infrastructure funding announced");
-  assert.equal(result.translated, false);
+  assert.equal(result.title, "Технології smart water для зменшення втрат води");
+  assert.equal(result.translated, true);
   assert.equal(result.failed, true);
   assert.equal(warnings[0][0], "Title translation failed");
 });

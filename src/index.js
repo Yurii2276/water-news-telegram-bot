@@ -10,9 +10,11 @@ import {
   sendDailyTechnicalReport,
 } from "./publisher.js";
 import { scheduleDaily } from "./scheduler.js";
+import { scheduleDailyLocal, scheduleWeeklyLocal, timeZoneParts } from "./scheduler.js";
 import { createTelegramClient } from "./telegram.js";
 import { prepareMaterialDisplayTitle } from "./translation.js";
 import { prepareMaterialContext } from "./context.js";
+import { sendWeeklyAnalysis } from "./weeklyAnalysis.js";
 
 loadEnvironmentFile();
 const config = getConfig();
@@ -28,6 +30,8 @@ const publisher = createAutoPublisher({
   telegram,
   channelId: config.publishChatId,
   maxDaily: config.maxDailyPublications,
+  editorialCap: config.publicationEditorialCap,
+  maxLocalIncidents: config.maxDailyLocalIncidents,
   intervalMs: config.postIntervalMinutes * 60 * 1000,
   maxRetries: config.publishMaxRetries,
   dryRun: config.dryRun,
@@ -77,6 +81,17 @@ const handleUpdate = createUpdateHandler({
     }),
 });
 
+const prepareDisplayTitle = (material) =>
+  prepareMaterialDisplayTitle(material, {
+    apiKey: config.openAiApiKey,
+    model: config.openAiModel,
+  });
+const prepareContext = (material) =>
+  prepareMaterialContext(material, {
+    apiKey: config.openAiApiKey,
+    model: config.openAiModel,
+  });
+
 const controller = new AbortController();
 const morningScan = createEmptyScanRetryController({
   scan: () => pipeline.scan(),
@@ -102,28 +117,45 @@ const stopReportScheduler = scheduleDaily(
     }),
   config.dailyReportHourUtc,
 );
-const stopDigestScheduler = config.dailyDigestEnabled
-  ? scheduleDaily(
-    () =>
-      sendDailyDigest({
+let lastWeeklyAnalysisLocalDate = null;
+const stopWeeklyAnalysisScheduler = config.weeklyAnalysisEnabled
+  ? scheduleWeeklyLocal(
+    async () => {
+      await sendWeeklyAnalysis({
         repository,
         telegram,
-        channelId: config.dailyDigestPublishToChannel
-          ? config.publishChatId
-          : config.adminTelegramId,
-        prepareDisplayTitle: (material) =>
-          prepareMaterialDisplayTitle(material, {
-            apiKey: config.openAiApiKey,
-            model: config.openAiModel,
-          }),
-        prepareContext: (material) =>
-          prepareMaterialContext(material, {
-            apiKey: config.openAiApiKey,
-            model: config.openAiModel,
-          }),
-      }),
-    config.dailyDigestHourUtc,
-    { minuteUtc: config.dailyDigestMinuteUtc },
+        chatId: config.weeklyAnalysisPublishToChannel ? config.publishChatId : config.adminTelegramId,
+        prepareDisplayTitle,
+        prepareContext,
+      });
+      lastWeeklyAnalysisLocalDate = timeZoneParts(new Date(), config.weeklyAnalysisTimezone).dateKey;
+    },
+    {
+      timeZone: config.weeklyAnalysisTimezone,
+      weekday: config.weeklyAnalysisLocalWeekday,
+      hour: config.weeklyAnalysisLocalHour,
+      minute: config.weeklyAnalysisLocalMinute,
+    },
+  )
+  : () => {};
+const stopDigestScheduler = config.dailyDigestEnabled
+  ? scheduleDailyLocal(
+    async () => {
+      const local = timeZoneParts(new Date(), config.dailyDigestTimezone);
+      if (local.weekday === config.weeklyAnalysisLocalWeekday && lastWeeklyAnalysisLocalDate === local.dateKey) return;
+      await sendDailyDigest({
+        repository,
+        telegram,
+        channelId: config.dailyDigestPublishToChannel ? config.publishChatId : config.adminTelegramId,
+        prepareDisplayTitle,
+        prepareContext,
+      });
+    },
+    {
+      timeZone: config.dailyDigestTimezone,
+      hour: config.dailyDigestLocalHour,
+      minute: config.dailyDigestLocalMinute,
+    },
   )
   : () => {};
 publisher.kick();
@@ -133,6 +165,7 @@ for (const event of ["SIGINT", "SIGTERM"]) {
     stopScheduler();
     stopReportScheduler();
     stopDigestScheduler();
+    stopWeeklyAnalysisScheduler();
     morningScan.reset();
     controller.abort();
   });

@@ -170,7 +170,7 @@ test("/publish_queue_now is admin-only and calls publisher drain", async () => {
   assert.match(sent.at(-1)[1], /лише адміну/);
 });
 
-test("/daily_digest is admin-only and returns grouped sections", async () => {
+test("/daily_digest is admin-only and returns concise editorial summary", async () => {
   const sent = [];
   let reads = 0;
   const handleUpdate = createUpdateHandler({
@@ -204,10 +204,10 @@ test("/daily_digest is admin-only and returns grouped sections", async () => {
   });
 
   assert.equal(reads, 1);
-  assert.match(sent[0][1], /Вода UA: підсумок дня/);
-  assert.match(sent[0][1], /Нормативка \/ регулювання/);
-  assert.match(sent[0][1], /Регулювання \/ НКРЕКП \/ законодавство/);
-  assert.match(sent[0][1], /Відновлення \/ донори/);
+  assert.match(sent[0][1], /Вода UA: головне за день/);
+  assert.match(sent[0][1], /Регулювання/);
+  assert.match(sent[0][1], /Міжнародна співпраця/);
+  assert.doesNotMatch(sent[0][1], /high|medium|low/);
 
   await handleUpdate({
     message: { chat: { id: 7 }, from: { id: 7 }, text: "/daily_digest" },
@@ -247,10 +247,10 @@ test("/daily_digest uses Ukrainian display titles", async () => {
   assert.match(sent[0][1], /WaterWorld/);
 });
 
-test("daily digest formatter emits empty section fallback", () => {
+test("daily digest formatter emits concise empty fallback", () => {
   const text = formatDailyDigest([]);
-  assert.match(text, /Немає важливих повідомлень/);
-  assert.match(text, /Технології та міжнародна практика/);
+  assert.match(text, /немає достатньо підтверджених матеріалів/);
+  assert.doesNotMatch(text, /Немає важливих повідомлень/);
 });
 
 test("daily digest does not expose long raw Google News URLs", () => {
@@ -266,5 +266,5 @@ test("daily digest does not expose long raw Google News URLs", () => {
   ]);
 
   assert.doesNotMatch(text, /news\.google\.com\/rss\/articles/);
-  assert.match(text, /Технології та міжнародна практика/);
+  assert.match(text, /Технології/);
 });

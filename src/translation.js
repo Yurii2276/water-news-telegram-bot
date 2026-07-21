@@ -1,3 +1,5 @@
+import { cleanTitle, deterministicUkrainianTitle } from "./editorial.js";
+
 function countMatches(value, pattern) {
   return [...String(value ?? "").matchAll(pattern)].length;
 }
@@ -12,7 +14,7 @@ function responseText(payload) {
 }
 
 export function titleForDisplay(material) {
-  return (
+  return cleanTitle(
     material?.displayTitleUk ??
     material?.display_title_uk ??
     material?.translatedTitle ??
@@ -20,7 +22,8 @@ export function titleForDisplay(material) {
     material?.aiDecision?.displayTitleUk ??
     material?.ai_decision?.displayTitleUk ??
     material?.title ??
-    ""
+    "",
+    material?.source_name ?? material?.sourceName,
   );
 }
 
@@ -35,6 +38,7 @@ export function isMostlyCyrillicTitle(title) {
 export function needsUkrainianTitle(title) {
   const text = String(title ?? "").trim();
   if (!text) return false;
+  if (/[ёыэъ]/i.test(text)) return true;
   return !isMostlyCyrillicTitle(text);
 }
 
@@ -47,7 +51,8 @@ export async function translateTitleToUkrainian(
     return { title: originalTitle, translated: false, failed: false };
   }
   if (!apiKey) {
-    return { title: originalTitle, translated: false, failed: true };
+    const fallbackTitle = deterministicUkrainianTitle(originalTitle);
+    return { title: fallbackTitle, translated: fallbackTitle !== originalTitle, failed: true };
   }
 
   try {
@@ -84,12 +89,13 @@ export async function translateTitleToUkrainian(
     };
   } catch (error) {
     logger.warn?.("Title translation failed", error);
-    return { title: originalTitle, translated: false, failed: true };
+    const fallbackTitle = deterministicUkrainianTitle(originalTitle);
+    return { title: fallbackTitle, translated: fallbackTitle !== originalTitle, failed: true };
   }
 }
 
 export async function prepareMaterialDisplayTitle(material, options = {}) {
-  const existingTitle = titleForDisplay(material);
+  const existingTitle = cleanTitle(titleForDisplay(material), material?.source_name ?? material?.sourceName);
   if (!needsUkrainianTitle(existingTitle)) {
     return {
       ...material,

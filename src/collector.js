@@ -36,6 +36,13 @@ export const TECHNOLOGY_GOOGLE_NEWS_QUERIES = [
   "leak detection water networks",
 ];
 
+export const PERSONNEL_GOOGLE_NEWS_QUERIES = [
+  "водоканал призначили директор керівник",
+  "НКРЕКП призначення звільнення",
+  "міськводоканал директор призначення",
+  "water utility CEO appointment Ukraine",
+];
+
 const TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const TRANSIENT_ERROR_CODES = new Set(["ECONNRESET", "ETIMEDOUT"]);
 const RETRY_DELAYS_MS = [0, 2_000, 5_000];
@@ -56,7 +63,8 @@ export function selectRotatingQueries(queries, count, now = new Date()) {
 
 function selectedTargetedQueries(now = new Date()) {
   return [
-    ...selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 2, now),
+    ...selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 1, now),
+    ...selectRotatingQueries(PERSONNEL_GOOGLE_NEWS_QUERIES, 1, now),
     ...selectRotatingQueries(TECHNOLOGY_GOOGLE_NEWS_QUERIES, 2, now),
   ];
 }
