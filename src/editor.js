@@ -8,7 +8,12 @@ import {
   preliminaryFilter,
   titleKeywordFallback,
 } from "./topics.js";
-import { createStoryKey, inferSourceQuality, factualExtract } from "./editorial.js";
+import {
+  createStoryKey,
+  inferSourceQuality,
+  factualExtract,
+  standalonePublicationEligibility,
+} from "./editorial.js";
 
 function createReport(discovered) {
   return {
@@ -23,6 +28,16 @@ function createReport(discovered) {
     source_fetch_failures: 0,
     transient_retries: 0,
     google_queries_executed: 0,
+    direct_sources_attempted: 0,
+    direct_sources_skipped_google_news_only: 0,
+    direct_sources_skipped_cooldown: 0,
+    transient_failures: 0,
+    permanent_failures: 0,
+    recovered_sources: 0,
+    candidates_discovered: 0,
+    story_clusters: 0,
+    standalone_eligible: 0,
+    insufficient_public_context: 0,
     scheduled_retry_attempt: 0,
     categories: Object.fromEntries(SOURCE_CATEGORIES.map((category) => [category, 0])),
     priorities: Object.fromEntries(PRIORITY_LEVELS.map((priority) => [priority, 0])),
@@ -45,6 +60,11 @@ function recordAccepted(report, material, categories = []) {
   if (profile.normativeAct || profile.normative_act) report.normative_act += 1;
   if (material.googleNewsUrlResolved) report.google_news_resolved_url += 1;
   if (material.googleNewsUrlUnresolved) report.google_news_unresolved_url += 1;
+  const standalone = standalonePublicationEligibility(material);
+  if (standalone.eligible) report.standalone_eligible += 1;
+  else if (standalone.reason === "insufficient_public_context" || standalone.reason === "title_only") {
+    report.insufficient_public_context += 1;
+  }
 }
 
 function recordRejection(report, candidate, type, reason) {
@@ -95,7 +115,7 @@ function fallbackDecision(candidate, keyword, preliminaryCategories = []) {
 async function extractForFallback(candidate, extract, logger) {
   try {
     const article = await extract(candidate);
-    if (article?.extractionStatus === "ok") return { ...article, contextBasis: "source_excerpt" };
+    if (article?.extractionStatus === "ok") return { ...article, contextBasis: "full_article" };
     return {
       ...candidate,
       ...(article ?? {}),
@@ -123,7 +143,7 @@ function enrichMaterialForStorage(material, aiDecision = undefined) {
     ...material,
     storyKey: material.storyKey ?? material.story_key ?? createStoryKey(material),
     sourceQuality: material.sourceQuality ?? material.source_quality ?? inferSourceQuality(material),
-    contextBasis: material.contextBasis ?? material.context_basis ?? aiDecision?.contextBasis ?? (material.content ? "source_excerpt" : "title_only"),
+    contextBasis: material.contextBasis ?? material.context_basis ?? aiDecision?.contextBasis ?? (material.content ? "full_article" : "title_only"),
     professionalContextUk: material.professionalContextUk ?? factualExtract(material),
   };
 }
@@ -280,6 +300,7 @@ export function createEditorPipeline({
         }
       }
 
+      report.story_clusters = new Set(existing.map((material) => material.storyKey ?? material.story_key ?? createStoryKey(material))).size;
       return report;
     },
   };

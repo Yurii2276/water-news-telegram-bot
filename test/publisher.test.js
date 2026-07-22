@@ -24,6 +24,14 @@ function queuedMaterial(id = 1) {
       whyImportant: "Перевірене пояснення.",
       hashtags: ["#вода"],
     },
+    content: [
+      "Перевірена новина повідомляє про рішення у сфері водопостачання громади.",
+      "Джерело зазначає, що рішення стосується роботи водоканалу та послуг для споживачів.",
+      "У матеріалі наведено офіційні дані про водну інфраструктуру та порядок виконання робіт.",
+      "Окремо описано наслідки для мешканців, які користуються централізованим водопостачанням.",
+      "Публікація пояснює, що наступні кроки мають виконувати відповідальні комунальні служби.",
+    ].join(" "),
+    contextBasis: "full_article",
   };
 }
 
@@ -88,7 +96,8 @@ test("Telegram publication uses Ukrainian display title and keeps source and URL
   assert.match(sent[0][1], /Технологія smart water для виявлення витоків скорочує втрати води/);
   assert.doesNotMatch(sent[0][1], /Global smart water leak detection/);
   assert.match(sent[0][1], /Джерело: WaterWorld/);
-  assert.match(sent[0][1], /🔗 <a href="https:\/\/example\.com\/smart-water">https:\/\/example\.com\/smart-water<\/a>/);
+  assert.match(sent[0][1], /🔗 <a href="https:\/\/example\.com\/smart-water">Читати джерело<\/a>/);
+  assert.doesNotMatch(sent[0][1].replace(/<a[^>]+href="[^"]+"[^>]*>.*?<\/a>/g, ""), /https?:\/\//);
   assert.equal(statuses[0][1], "published");
 });
 
@@ -174,6 +183,55 @@ test("daily limit prevents an eleventh publication", async () => {
   const result = await publisher.drain();
   assert.equal(result.publishedNow, 0);
   assert.equal(queueReads, 0);
+});
+
+test("default standalone publication limit is 18 per Kyiv day", async () => {
+  let queueReads = 0;
+  const publisher = createAutoPublisher({
+    repository: {
+      countPublishedToday: async (timeZone) => {
+        assert.equal(timeZone, "Europe/Kyiv");
+        return 18;
+      },
+      getQueue: async () => {
+        queueReads += 1;
+        return [queuedMaterial()];
+      },
+    },
+    telegram: { sendMessage: async () => {} },
+    channelId: "-1001",
+  });
+
+  const result = await publisher.drain();
+  assert.equal(result.limit, 18);
+  assert.equal(result.publishedNow, 0);
+  assert.equal(queueReads, 0);
+});
+
+test("insufficient context is retained for digest only and not published standalone", async () => {
+  const sent = [];
+  const statuses = [];
+  const queue = [{ ...queuedMaterial(7), content: "Короткий опис.", contextBasis: "rss_snippet" }];
+  const publisher = createAutoPublisher({
+    repository: {
+      countPublishedToday: async () => 0,
+      getQueue: async () => queue.splice(0, 1),
+      setStatus: async (...args) => statuses.push(args),
+      recordPublishFailure: async () => {},
+    },
+    telegram: { sendMessage: async (...args) => sent.push(args) },
+    channelId: "-1001",
+    intervalMs: 0,
+    dryRun: false,
+    verifySource: async () => ({ verified: true }),
+    sleep: async () => {},
+  });
+
+  const result = await publisher.drain();
+  assert.equal(result.publishedNow, 0);
+  assert.equal(result.digestOnlyNow, 1);
+  assert.equal(sent.length, 0);
+  assert.deepEqual(statuses[0].slice(0, 3), [7, "digest_only", "insufficient_public_context"]);
 });
 
 test("valid unregistered HTTPS URL is publishable with warning", async () => {

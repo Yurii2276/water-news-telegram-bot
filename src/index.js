@@ -32,6 +32,8 @@ const publisher = createAutoPublisher({
   maxDaily: config.maxDailyPublications,
   editorialCap: config.publicationEditorialCap,
   maxLocalIncidents: config.maxDailyLocalIncidents,
+  maxDailyInternational: config.maxDailyInternationalPosts,
+  publicationCountTimezone: config.publicationCountTimezone,
   intervalMs: config.postIntervalMinutes * 60 * 1000,
   maxRetries: config.publishMaxRetries,
   dryRun: config.dryRun,
@@ -52,6 +54,10 @@ const pipeline = createEditorPipeline({
     discoverAllSources({
       googleNewsRssUrl: config.newsRssUrl,
       limit: config.newsLimit,
+      sourceHealthStore: repository,
+      internationalNewsEnabled: config.internationalNewsEnabled,
+      sourcePermanentFailureThreshold: config.sourcePermanentFailureThreshold,
+      sourcePermanentFailureCooldownHours: config.sourcePermanentFailureCooldownHours,
     }),
   extract: (candidate) => extractArticle(candidate),
   classify: (article) =>
@@ -114,6 +120,7 @@ const stopReportScheduler = scheduleDaily(
       telegram,
       adminTelegramId: config.adminTelegramId,
       maxDaily: config.maxDailyPublications,
+      publicationCountTimezone: config.publicationCountTimezone,
     }),
   config.dailyReportHourUtc,
 );

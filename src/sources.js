@@ -80,6 +80,7 @@ export const OFFICIAL_SOURCES = [
     id: "unicef_ukraine",
     category: "donor",
     name: "UNICEF Ukraine",
+    discoveryMode: "google_news_only",
     listingUrl: "https://www.unicef.org/ukraine/en/press-releases",
     hosts: ["unicef.org"],
   },
@@ -87,6 +88,7 @@ export const OFFICIAL_SOURCES = [
     id: "world_bank_ukraine",
     category: "donor",
     name: "World Bank Ukraine",
+    discoveryMode: "google_news_only",
     listingUrl: "https://www.worldbank.org/en/country/ukraine/news",
     hosts: ["worldbank.org"],
   },
@@ -94,6 +96,7 @@ export const OFFICIAL_SOURCES = [
     id: "ebrd_ukraine",
     category: "donor",
     name: "EBRD Ukraine",
+    discoveryMode: "google_news_only",
     listingUrl: "https://www.ebrd.com/news-and-events/news.html",
     hosts: ["ebrd.com"],
   },
@@ -101,6 +104,7 @@ export const OFFICIAL_SOURCES = [
     id: "undp_ukraine",
     category: "donor",
     name: "UNDP Ukraine",
+    discoveryMode: "google_news_only",
     listingUrl: "https://www.undp.org/ukraine/press-releases",
     hosts: ["undp.org"],
   },
@@ -108,6 +112,7 @@ export const OFFICIAL_SOURCES = [
     id: "usaid_ukraine",
     category: "donor",
     name: "USAID Ukraine",
+    discoveryMode: "google_news_only",
     listingUrl: "https://www.usaid.gov/ukraine/newsroom",
     hosts: ["usaid.gov"],
   },
@@ -121,6 +126,13 @@ export const OFFICIAL_SOURCES = [
 ];
 
 export const GOOGLE_NEWS_SOURCE_CATEGORY = "general_news";
+export const GOOGLE_NEWS_ONLY_SOURCE_IDS = new Set(
+  OFFICIAL_SOURCES.filter((source) => source.discoveryMode === "google_news_only").map((source) => source.id),
+);
+
+export function isGoogleNewsOnlySource(source) {
+  return source?.discoveryMode === "google_news_only";
+}
 
 export function sourceCategoryForId(sourceId) {
   if (sourceId === "google_news") return GOOGLE_NEWS_SOURCE_CATEGORY;
@@ -128,7 +140,12 @@ export function sourceCategoryForId(sourceId) {
 }
 
 export function sourceForUrl(value) {
-  const host = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+  let host;
+  try {
+    host = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return null;
+  }
   return OFFICIAL_SOURCES.find((source) =>
     source.hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`)),
   );

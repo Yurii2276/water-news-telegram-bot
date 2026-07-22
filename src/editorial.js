@@ -34,7 +34,64 @@ const PUBLIC_CATEGORY_LABELS = {
 
 const CATEGORY_EMOJI = {
   personnel_change: "👤",
+  tariffs: "💰",
+  regulator: "⚖️",
+  government: "⚖️",
+  parliament: "⚖️",
+  recovery: "🏗️",
+  infrastructure: "🏗️",
+  technology: "⚙️",
+  international_tech: "⚙️",
+  donor: "🤝",
+  donors: "🤝",
+  vodokanal: "💧",
+  association: "💧",
+  local_media: "📍",
 };
+
+export const SOURCE_LINK_TEXT = "Читати джерело";
+
+const TARIFF_PATTERN =
+  /тариф|тарифи|тарифоутворення|вартість води|ціна на воду|плата за водопостачання|плата за водовідведення|підвищення тарифу|зниження тарифу|коригування тарифу|абонентська плата|економічно обґрунтований тариф/iu;
+
+const REGULATION_PATTERN =
+  /нкрекп|постанова|законопроєкт|законопроект|верховн\p{L}+\s+рад|кабмін|кабінет міністрів|регулятор|ліцензій|інвестиційна програма/iu;
+
+const INVESTMENT_PATTERN =
+  /інвестиці|грант|донор|кредит|позик|відновлен|реконструкц|модернізац|інфраструктур/iu;
+
+const TECHNOLOGY_PATTERN =
+  /smart water|leak detection|non[- ]revenue water|water supply technology|wastewater treatment|digital twin|smart metering|pressure management|water utility technology|очисн\p{L}+ споруд|стічн\p{L}+ вод|технолог/iu;
+
+const INTERNATIONAL_PATTERN =
+  /unicef|undp|un-water|who|world bank|ebrd|eib|european commission|oecd|unep|wash|міжнародн|донор|грант|технічна допомога/iu;
+
+const VODOKANAL_PATTERN =
+  /водоканал|водопостачання|водовідведення|питна вода|питне водопостачання|втрати води|зношені мережі/iu;
+
+const LOCAL_SITUATION_PATTERN =
+  /без води|відключенн|аварі|громад|район|міст[оаі]|селищ|обміління|дністер|каламутна вода/iu;
+
+const RUSSIAN_TITLE_REPLACEMENTS = [
+  [/\bКиеві\b/g, "Києві"],
+  [/\bКиєві\b/g, "Києві"],
+  [/\bКиеві\b/g, "Києві"],
+  [/\bКиев\b/g, "Київ"],
+  [/\bКиевский\b/gi, "київський"],
+  [/\bкиевский\b/gi, "київський"],
+  [/\bстоимость\b/gi, "вартість"],
+  [/\bвырастет\b/gi, "зросте"],
+  [/\bповышение\b/gi, "підвищення"],
+  [/\bводоснабжение\b/gi, "водопостачання"],
+  [/\bводоотведение\b/gi, "водовідведення"],
+  [/\bотключение\b/gi, "відключення"],
+  [/\bназначен\b/gi, "призначений"],
+  [/\bуволен\b/gi, "звільнений"],
+  [/\bтарифов\b/gi, "тарифів"],
+];
+
+const OBVIOUS_RUSSIAN_WORDS =
+  /\b(?:Киев|Киеві|Киеві|киевский|стоимость|вырастет|повышение|водоснабжение|водоотведение|отключение|назначен|уволен|тарифов)\b/iu;
 
 const SOURCE_QUALITY_ORDER = {
   official_regulator: 0,
@@ -94,7 +151,7 @@ export function cleanTitle(title, sourceName = "") {
 }
 
 export function deterministicUkrainianTitle(title, sourceName = "") {
-  const cleaned = cleanTitle(title, sourceName);
+  const cleaned = correctUkrainianTitle(cleanTitle(title, sourceName));
   if (/\p{Script=Latin}/u.test(cleaned) && !/\p{Script=Cyrillic}/u.test(cleaned)) {
     if (/smart water|leak detection|non[- ]revenue water/i.test(cleaned)) {
       return "Технології smart water для зменшення втрат води";
@@ -113,21 +170,63 @@ export function deterministicUkrainianTitle(title, sourceName = "") {
   return cleaned;
 }
 
-export function publicCategoryLabel(material) {
+export function correctUkrainianTitle(title) {
+  let text = String(title ?? "").replace(/\s+/g, " ").trim();
+  for (const [pattern, replacement] of RUSSIAN_TITLE_REPLACEMENTS) {
+    text = text.replace(pattern, replacement);
+  }
+  return text;
+}
+
+export function hasObviousRussianTitleWords(title) {
+  return OBVIOUS_RUSSIAN_WORDS.test(String(title ?? ""));
+}
+
+function publicCategoryText(material) {
   const decision = material?.ai_decision ?? material?.aiDecision ?? {};
-  const category =
-    decision.materialCategory ??
-    decision.sourceCategory ??
-    decision.category ??
-    material?.sourceCategory ??
-    material?.source_category ??
-    "general_news";
+  return [
+    material?.title,
+    material?.displayTitleUk,
+    material?.translatedTitle,
+    material?.titleUk,
+    material?.content,
+    material?.summary,
+    material?.snippet,
+    material?.sourceName,
+    material?.source_name,
+    decision.materialCategory,
+    decision.sourceCategory,
+    decision.category,
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function publicCategoryKey(material) {
+  const decision = material?.ai_decision ?? material?.aiDecision ?? {};
+  const text = publicCategoryText(material);
+  if (isPersonnelChange(material) || decision.materialCategory === "personnel_change" || decision.category === "personnel_change") {
+    return "personnel_change";
+  }
+  if (TARIFF_PATTERN.test(text) || decision.materialCategory === "tariffs" || decision.category === "tariffs") return "tariffs";
+  if (REGULATION_PATTERN.test(text) || ["regulator", "government", "parliament"].includes(decision.materialCategory ?? decision.sourceCategory ?? material?.sourceCategory ?? material?.source_category)) {
+    return decision.materialCategory === "personnel_change" ? "personnel_change" : (decision.materialCategory ?? decision.sourceCategory ?? material?.sourceCategory ?? material?.source_category ?? "regulator");
+  }
+  if (INVESTMENT_PATTERN.test(text) || ["recovery", "infrastructure"].includes(decision.materialCategory ?? decision.category)) return "recovery";
+  if (TECHNOLOGY_PATTERN.test(text) || ["technology", "international_tech"].includes(decision.materialCategory ?? decision.category)) return "technology";
+  if (INTERNATIONAL_PATTERN.test(text) || ["donor", "donors"].includes(decision.materialCategory ?? decision.sourceCategory ?? material?.sourceCategory ?? material?.source_category)) return "donor";
+  if (VODOKANAL_PATTERN.test(text) || ["vodokanal", "association", "water_supply", "wastewater"].includes(decision.materialCategory ?? decision.sourceCategory ?? material?.sourceCategory ?? material?.source_category)) return "vodokanal";
+  if (LOCAL_SITUATION_PATTERN.test(text) || (decision.materialCategory ?? decision.sourceCategory ?? material?.sourceCategory ?? material?.source_category) === "local_media") return "local_media";
+  return "general_news";
+}
+
+export function publicCategoryLabel(material) {
+  const category = publicCategoryKey(material);
   return PUBLIC_CATEGORY_LABELS[category] ?? PUBLIC_CATEGORY_LABELS.general_news;
 }
 
 export function publicCategoryEmoji(material) {
-  const decision = material?.ai_decision ?? material?.aiDecision ?? {};
-  const category = decision.materialCategory ?? decision.category;
+  const category = publicCategoryKey(material);
   return CATEGORY_EMOJI[category] ?? "💧";
 }
 
@@ -175,6 +274,65 @@ export function factualExtract(material) {
     .filter((sentence) => contextHasSourceFacts(sentence, sourceText))
     .slice(0, 3);
   return validatePublicContext(sentences.join(" "), material);
+}
+
+export function publicDescriptionSentences(material, maxSentences = 10) {
+  const basis = material?.contextBasis ?? material?.context_basis ?? "title";
+  if (basis === "title_only") return [];
+  const sourceText = String(material?.content || material?.summary || material?.snippet || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!sourceText) return [];
+  const seen = new Set();
+  return sourceText
+    .split(/(?<=[.!?])\s+|(?<=\.)\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter((sentence) => sentence.length >= 35 && sentence.length <= 360)
+    .filter((sentence) => !hasForbiddenGenericContext(sentence))
+    .filter((sentence) => contextHasSourceFacts(sentence, sourceText))
+    .filter((sentence) => {
+      const key = normalizeTitle(sentence).slice(0, 120);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, maxSentences);
+}
+
+export function buildPublicDescription(material, { minSentences = 5, maxSentences = 10 } = {}) {
+  const sentences = publicDescriptionSentences(material, maxSentences);
+  if (sentences.length < minSentences) return "";
+  return sentences.join(" ").slice(0, 1800);
+}
+
+export function standalonePublicationEligibility(material) {
+  const basis = material?.contextBasis ?? material?.context_basis ?? "title";
+  const description = buildPublicDescription(material);
+  if (description) return { eligible: true, description, basis };
+  return {
+    eligible: false,
+    reason: basis === "title_only" ? "title_only" : "insufficient_public_context",
+    basis,
+  };
+}
+
+export function visibleTextFromHtml(html) {
+  return String(html ?? "")
+    .replace(/<a\b[^>]*href=(["'])https?:\/\/[^"']+\1[^>]*>(.*?)<\/a>/giu, "$2")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function hasVisibleRawUrl(html) {
+  return /https?:\/\//iu.test(visibleTextFromHtml(html));
+}
+
+export function validatePublicMessage(html) {
+  if (hasVisibleRawUrl(html)) {
+    throw new Error("Public Telegram message contains a visible raw URL");
+  }
+  return html;
 }
 
 export function inferSourceQuality(material) {

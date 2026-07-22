@@ -62,8 +62,20 @@ export function createDatabase(databaseUrl) {
         ALTER TABLE materials ADD COLUMN IF NOT EXISTS source_quality TEXT;
         ALTER TABLE materials ADD COLUMN IF NOT EXISTS context_basis TEXT;
         ALTER TABLE materials ADD COLUMN IF NOT EXISTS professional_context_uk TEXT;
+        ALTER TABLE materials ADD COLUMN IF NOT EXISTS public_description_uk TEXT;
         CREATE INDEX IF NOT EXISTS materials_story_key_idx ON materials(story_key);
         CREATE INDEX IF NOT EXISTS materials_source_quality_idx ON materials(source_quality);
+        CREATE TABLE IF NOT EXISTS source_health (
+          source_id TEXT PRIMARY KEY,
+          status TEXT NOT NULL DEFAULT 'recovered',
+          consecutive_permanent_failures INTEGER NOT NULL DEFAULT 0,
+          last_status_code INTEGER,
+          last_error TEXT,
+          cooldown_until TIMESTAMPTZ,
+          last_failure_at TIMESTAMPTZ,
+          last_recovered_at TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
       `);
     },
 
@@ -178,14 +190,15 @@ export function createDatabase(databaseUrl) {
       return result.rowCount;
     },
 
-    async countPublishedToday() {
+    async countPublishedToday(timeZone = "Europe/Kyiv") {
       const { rows } = await pool.query(
         `SELECT COUNT(*)::int AS count FROM materials
          WHERE status='published'
            AND published_at >= (
-             date_trunc('day', NOW() AT TIME ZONE 'Europe/Kyiv')
-             AT TIME ZONE 'Europe/Kyiv'
+             date_trunc('day', NOW() AT TIME ZONE $1)
+             AT TIME ZONE $1
            )`,
+        [timeZone],
       );
       return rows[0].count;
     },
@@ -238,7 +251,7 @@ export function createDatabase(databaseUrl) {
     async getDailyDigestMaterials() {
       const { rows } = await pool.query(
         `SELECT * FROM materials
-         WHERE status IN ('published', 'queued', 'dry_run')
+         WHERE status IN ('published', 'queued', 'dry_run', 'digest_only')
            AND updated_at >= NOW() - INTERVAL '24 hours'
          ORDER BY
            CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
@@ -270,7 +283,7 @@ export function createDatabase(databaseUrl) {
     async getWeeklyAnalysisMaterials() {
       const { rows } = await pool.query(
         `SELECT * FROM materials
-         WHERE status IN ('published', 'queued', 'dry_run')
+         WHERE status IN ('published', 'queued', 'dry_run', 'digest_only')
            AND updated_at >= NOW() - INTERVAL '7 days'
          ORDER BY
            CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
@@ -316,6 +329,60 @@ export function createDatabase(databaseUrl) {
         [id, text],
       );
       return rows[0] ?? null;
+    },
+
+    async getSourceHealth(sourceId) {
+      const { rows } = await pool.query(`SELECT * FROM source_health WHERE source_id=$1`, [sourceId]);
+      return rows[0] ?? null;
+    },
+
+    async isSourceInCooldown(sourceId, now = new Date()) {
+      const health = await this.getSourceHealth(sourceId);
+      return Boolean(health?.cooldown_until && new Date(health.cooldown_until) > now);
+    },
+
+    async recordSourceFetchSuccess(sourceId) {
+      const previous = await this.getSourceHealth(sourceId);
+      await pool.query(
+        `INSERT INTO source_health (
+           source_id, status, consecutive_permanent_failures, cooldown_until, last_recovered_at, updated_at
+         ) VALUES ($1,'recovered',0,NULL,NOW(),NOW())
+         ON CONFLICT (source_id) DO UPDATE SET
+           status='recovered',
+           consecutive_permanent_failures=0,
+           cooldown_until=NULL,
+           last_recovered_at=NOW(),
+           updated_at=NOW()`,
+        [sourceId],
+      );
+      return previous && previous.status !== "recovered" ? "recovered" : "ok";
+    },
+
+    async recordSourceFetchFailure(
+      sourceId,
+      { status = "transient_failure", statusCode = null, error = "", threshold = 3, cooldownHours = 168 } = {},
+    ) {
+      const permanent = status === "permanent_failure" || status === "blocked";
+      const cooldownExpression = permanent
+        ? `CASE WHEN source_health.consecutive_permanent_failures + 1 >= $5 THEN NOW() + ($6 * INTERVAL '1 hour') ELSE source_health.cooldown_until END`
+        : `source_health.cooldown_until`;
+      const { rows } = await pool.query(
+        `INSERT INTO source_health (
+           source_id, status, consecutive_permanent_failures, last_status_code, last_error,
+           cooldown_until, last_failure_at, updated_at
+         ) VALUES ($1,$2,CASE WHEN $3 THEN 1 ELSE 0 END,$4,$7,NULL,NOW(),NOW())
+         ON CONFLICT (source_id) DO UPDATE SET
+           status=$2,
+           consecutive_permanent_failures=CASE WHEN $3 THEN source_health.consecutive_permanent_failures + 1 ELSE 0 END,
+           last_status_code=$4,
+           last_error=$7,
+           cooldown_until=${cooldownExpression},
+           last_failure_at=NOW(),
+           updated_at=NOW()
+         RETURNING *`,
+        [sourceId, status, permanent, statusCode, threshold, cooldownHours, String(error).slice(0, 500)],
+      );
+      return rows[0];
     },
 
     close: () => pool.end(),

@@ -1,8 +1,7 @@
 import { factualExtract, publicCategoryLabel, uniqueStoryMaterials } from "./editorial.js";
-import { escapeHtml, formatPublication } from "./telegram.js";
+import { escapeHtml, formatPublication, formatSourceLink } from "./telegram.js";
 import { titleForDisplay } from "./translation.js";
 import { formatWeeklyAnalysis } from "./weeklyAnalysis.js";
-import { isGoogleNewsUrl } from "./urlResolver.js";
 
 const HELP_MESSAGE = [
   "<b>Команди редактора</b>",
@@ -88,6 +87,16 @@ export function formatScanReport(report) {
     `Google News URL розкрито: ${report.google_news_resolved_url ?? 0}`,
     `Google News URL не розкрито: ${report.google_news_unresolved_url ?? 0}`,
     `Google News запитів: ${report.google_queries_executed ?? 0}`,
+    `Direct sources attempted: ${report.direct_sources_attempted ?? 0}`,
+    `Direct skipped google_news_only: ${report.direct_sources_skipped_google_news_only ?? 0}`,
+    `Direct skipped cooldown: ${report.direct_sources_skipped_cooldown ?? 0}`,
+    `Transient failures: ${report.transient_failures ?? 0}`,
+    `Permanent failures: ${report.permanent_failures ?? 0}`,
+    `Recovered sources: ${report.recovered_sources ?? 0}`,
+    `Candidates discovered: ${report.candidates_discovered ?? report.found ?? 0}`,
+    `Story clusters: ${report.story_clusters ?? 0}`,
+    `Standalone eligible: ${report.standalone_eligible ?? 0}`,
+    `Insufficient public context: ${report.insufficient_public_context ?? 0}`,
     `Помилок джерел: ${report.source_fetch_failures ?? 0}`,
     `Повторів HTTP: ${report.transient_retries ?? 0}`,
     "",
@@ -146,7 +155,7 @@ export function formatDailyDigest(materials) {
       "",
       `${index + 1}. <b>${escapeHtml(titleForDisplay(material))}</b>`,
       category ? `   ${escapeHtml(category)}` : null,
-      `   Джерело: ${escapeHtml(source)}${material.url && !isGoogleNewsUrl(material.url) ? ` — ${escapeHtml(material.url)}` : ""}`,
+      `   Джерело: ${escapeHtml(source)}${material.url ? ` ${formatSourceLink(material.url)}` : ""}`,
       extract ? `   Факт: ${escapeHtml(extract)}` : null,
     );
   }
