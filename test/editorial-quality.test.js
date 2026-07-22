@@ -11,6 +11,8 @@ import {
   publicCategoryLabel,
   uniqueStoryMaterials,
   validatePublicContext,
+  validatePublicMessage,
+  visibleTextFromHtml,
 } from "../src/editorial.js";
 import { prepareMaterialContext } from "../src/context.js";
 import { formatDailyDigest } from "../src/bot.js";
@@ -116,9 +118,20 @@ test("Telegram publication omits generic context and uses public URL", () => {
       whyImportant: "Матеріал стосується регулювання водопостачання та може впливати на тарифи.",
     },
   });
-  assert.match(text, /💧 <b>Регулювання<\/b>/);
-  assert.match(text, /https:\/\/www\.nerc\.gov\.ua\/news\/tariff/);
+  assert.match(text, /💰 <b>Тарифи<\/b>/);
+  assert.match(text, /<a href="https:\/\/www\.nerc\.gov\.ua\/news\/tariff">Читати джерело<\/a>/);
+  assert.doesNotMatch(visibleTextFromHtml(text), /https:\/\/www\.nerc\.gov\.ua\/news\/tariff/);
   assert.doesNotMatch(text, /Матеріал стосується/);
+});
+
+test("public message validator rejects visible URLs but preserves href URLs", () => {
+  const safe = 'Джерело: Example\n🔗 <a href="https://example.com/source">Читати джерело</a>';
+  assert.equal(validatePublicMessage(safe), safe);
+  assert.equal(visibleTextFromHtml(safe), "Джерело: Example 🔗 Читати джерело");
+  assert.throws(
+    () => validatePublicMessage("Джерело: Example\nhttps://example.com/source"),
+    /visible raw URL/,
+  );
 });
 
 test("strong keyword fallback does not call OpenAI classifier", async () => {

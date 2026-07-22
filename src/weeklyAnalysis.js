@@ -4,7 +4,7 @@ import {
   sourceQualityRank,
   uniqueStoryMaterials,
 } from "./editorial.js";
-import { escapeHtml, escapeHtmlAttribute } from "./telegram.js";
+import { escapeHtml, formatSourceLink } from "./telegram.js";
 import { titleForDisplay } from "./translation.js";
 
 function decisionOf(material) {
@@ -29,7 +29,7 @@ function sectionMaterials(materials, categories, limit = 5) {
 function itemLine(material, index) {
   const title = escapeHtml(titleForDisplay(material));
   const source = escapeHtml(material.source_name ?? material.sourceName ?? "джерело");
-  const url = material.url ? ` — <a href="${escapeHtmlAttribute(material.url)}">джерело</a>` : "";
+  const url = material.url ? ` ${formatSourceLink(material.url)}` : "";
   const extract = factualExtract(material);
   return [
     `${index}. <b>${title}</b>`,

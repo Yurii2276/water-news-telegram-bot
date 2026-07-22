@@ -54,9 +54,16 @@ npm start
 | `WEEKLY_ANALYSIS_LOCAL_WEEKDAY` | `5` | день тижня, 1=понеділок, 5=п’ятниця |
 | `WEEKLY_ANALYSIS_LOCAL_HOUR` | `15` | локальна година weekly analysis |
 | `WEEKLY_ANALYSIS_LOCAL_MINUTE` | `0` | локальна хвилина weekly analysis |
-| `MAX_DAILY_PUBLICATIONS` | `10` | жорсткий технічний максимум публікацій за день |
-| `PUBLICATION_EDITORIAL_CAP` | `7` | редакційний денний cap для звичайного потоку |
-| `MAX_DAILY_LOCAL_INCIDENTS` | `2` | максимум локальних аварійних/відключених сюжетів за день |
+| `MAX_DAILY_PUBLICATIONS` | `18` | жорсткий технічний максимум standalone-публікацій за календарний день |
+| `PUBLICATION_EDITORIAL_CAP` | `18` | редакційний денний cap для звичайного standalone-потоку |
+| `MAX_DAILY_LOCAL_INCIDENTS` | `3` | максимум локальних аварійних/відключених сюжетів за день |
+| `PUBLICATION_COUNT_TIMEZONE` | `Europe/Kyiv` | timezone для денного лічильника публікацій |
+| `INTERNATIONAL_NEWS_ENABLED` | `true` | вмикає міжнародні institutional/technology Google News запити |
+| `MAX_DAILY_INTERNATIONAL_POSTS` | `5` | максимум міжнародних standalone-публікацій у межах загального cap |
+| `INTERNATIONAL_STORY_MAX_AGE_DAYS` | `7` | максимальний вік міжнародного сюжету для редакційного відбору |
+| `SOURCE_PERMANENT_FAILURE_THRESHOLD` | `3` | кількість повторних 403/404 до cooldown |
+| `SOURCE_PERMANENT_FAILURE_COOLDOWN_HOURS` | `168` | тривалість cooldown для direct source discovery |
+| `SOURCE_FAILURE_NOTIFICATION_COOLDOWN_HOURS` | `24` | cooldown для технічних повідомлень адміну про джерела |
 | `POST_INTERVAL_MINUTES` | `15` | інтервал між постами |
 | `PUBLISH_MAX_RETRIES` | `3` | retry публікації |
 
@@ -77,6 +84,17 @@ npm start
 Проєкт налаштований як long-polling worker через `railway.json`. HTTP server, public domain і `PORT` не потрібні. На Railway додайте PostgreSQL service і всі required Variables з `.env.example`.
 
 Для production-публікації явно встановіть `DRY_RUN=false`. До перевірки Telegram-каналу, admin ID і Railway Variables залишайте `DRY_RUN=true`.
+
+## Production publication contract
+
+- Публічні Telegram-пости використовують HTML `parse_mode` і ніколи не показують raw URL у видимому тексті. Посилання має формат `🔗 <a href="{url}">Читати джерело</a>`.
+- Стандартний standalone-пост публікується лише тоді, коли з повного тексту статті, офіційного документа або надійного RSS/snippet можна сформувати 5–10 фактологічних речень українською без вигадування фактів.
+- Якщо контексту недостатньо, матеріал не публікується як standalone і отримує внутрішній статус/причину `insufficient_public_context` або `title_only`; такі матеріали можуть лишатися корисними для digest/аналізу.
+- Категорії публікуються тільки як зрозумілі українські labels. Тарифні сюжети мають пріоритет над загальною “водною безпекою” і показуються як `💰 Тарифи`.
+- Денний standalone cap рахується за календарним днем `Europe/Kyiv`: effective limit = `min(MAX_DAILY_PUBLICATIONS, PUBLICATION_EDITORIAL_CAP)`, за замовчуванням 18. `/daily_digest`, `/weekly_analysis`, admin previews і технічні повідомлення не споживають цей cap.
+- Джерела `unicef_ukraine`, `undp_ukraine`, `world_bank_ukraine`, `ebrd_ukraine`, `usaid_ukraine` мають discovery mode `google_news_only`: їхні застарілі/заблоковані listing URL не fetch-яться напряму, але організації залишаються у source registry для класифікації, display name, ranking і аналізу.
+- Targeted Google News discovery має максимум чотири запити за scan: український official/regulatory, український personnel/government, міжнародне financing/institution, global water technology/professional. Ротація детермінована за датою `Europe/Kyiv`.
+- Повторні 403/404 direct source failures записуються в additive `source_health`; після threshold джерело входить у cooldown, а diagnostics залишаються admin-only.
 
 ## Перевірка
 

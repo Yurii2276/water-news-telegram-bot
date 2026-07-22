@@ -1,5 +1,9 @@
 import { isValidHttpUrl } from "./dedup.js";
-import { isSignificantLocalIncident } from "./editorial.js";
+import {
+  isSignificantLocalIncident,
+  publicCategoryKey,
+  standalonePublicationEligibility,
+} from "./editorial.js";
 import { sourceForUrl } from "./sources.js";
 import { formatPublication } from "./telegram.js";
 
@@ -50,9 +54,11 @@ export function createAutoPublisher({
   repository,
   telegram,
   channelId,
-  maxDaily = 10,
-  editorialCap = 7,
-  maxLocalIncidents = 2,
+  maxDaily = 18,
+  editorialCap = 18,
+  maxLocalIncidents = 3,
+  maxDailyInternational = 5,
+  publicationCountTimezone = "Europe/Kyiv",
   intervalMs = 15 * 60 * 1000,
   maxRetries = 3,
   dryRun = true,
@@ -63,6 +69,10 @@ export function createAutoPublisher({
   logger = console,
 }) {
   let activePromise = null;
+
+  function isInternationalMaterial(material) {
+    return ["donor", "international_tech", "technology"].includes(publicCategoryKey(material));
+  }
 
   async function publishWithRetries(material) {
     for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
@@ -84,6 +94,15 @@ export function createAutoPublisher({
           : material;
         const titledMaterial = await prepareDisplayTitle(verifiedMaterial);
         const publicationMaterial = await prepareContext(titledMaterial);
+        const eligibility = standalonePublicationEligibility(publicationMaterial);
+        if (!publicationMaterial.editor_text && !eligibility.eligible) {
+          await repository.setStatus(
+            material.id,
+            "digest_only",
+            eligibility.reason ?? "insufficient_public_context",
+          );
+          return "digest_only";
+        }
         await telegram.sendMessage(channelId, formatPublication(publicationMaterial));
         await repository.setStatus(material.id, "published", "Automatically published");
         return "published";
@@ -105,15 +124,18 @@ export function createAutoPublisher({
   }
 
   async function drain() {
-    let publishedToday = await repository.countPublishedToday();
+    let publishedToday = await repository.countPublishedToday(publicationCountTimezone);
     let publishedNow = 0;
     let simulatedNow = 0;
+    let digestOnlyNow = 0;
     let localIncidentsNow = 0;
+    let internationalNow = 0;
     const effectiveLimit = Math.min(maxDaily, editorialCap);
 
     while (publishedToday < effectiveLimit) {
       const queue = await repository.getQueue(10);
       const material = queue.find((item) => {
+        if (isInternationalMaterial(item) && internationalNow >= maxDailyInternational) return false;
         if (!isSignificantLocalIncident(item)) return true;
         return localIncidentsNow < maxLocalIncidents;
       });
@@ -124,10 +146,14 @@ export function createAutoPublisher({
         publishedToday += 1;
         publishedNow += 1;
         if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
+        if (isInternationalMaterial(material)) internationalNow += 1;
         if (publishedToday < effectiveLimit) await sleep(intervalMs);
       } else if (outcome === "dry_run") {
         simulatedNow += 1;
         if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
+        if (isInternationalMaterial(material)) internationalNow += 1;
+      } else if (outcome === "digest_only") {
+        digestOnlyNow += 1;
       }
     }
 
@@ -138,6 +164,8 @@ export function createAutoPublisher({
       limit: effectiveLimit,
       configuredMaxDaily: maxDaily,
       editorialCap,
+      maxDailyInternational,
+      digestOnlyNow,
       dryRun,
     };
   }
@@ -160,10 +188,11 @@ export async function sendDailyTechnicalReport({
   repository,
   telegram,
   adminTelegramId,
-  maxDaily = 10,
+  maxDaily = 18,
+  publicationCountTimezone = "Europe/Kyiv",
 }) {
   const stats = await repository.getDailyStats();
-  const publishedToday = await repository.countPublishedToday();
+  const publishedToday = await repository.countPublishedToday(publicationCountTimezone);
   const rows = Object.entries(stats).map(([status, count]) => `${status}: ${count}`);
   await telegram.sendMessage(
     adminTelegramId,

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createUpdateHandler, formatDailyDigest, formatScanReport } from "../src/bot.js";
+import { visibleTextFromHtml } from "../src/editorial.js";
 
 test("/scan starts collection and auto-publisher", async () => {
   const sent = [];
@@ -205,8 +206,8 @@ test("/daily_digest is admin-only and returns concise editorial summary", async 
 
   assert.equal(reads, 1);
   assert.match(sent[0][1], /Вода UA: головне за день/);
-  assert.match(sent[0][1], /Регулювання/);
-  assert.match(sent[0][1], /Міжнародна співпраця/);
+  assert.match(sent[0][1], /Тарифи/);
+  assert.match(sent[0][1], /Інвестиції/);
   assert.doesNotMatch(sent[0][1], /high|medium|low/);
 
   await handleUpdate({
@@ -265,6 +266,7 @@ test("daily digest does not expose long raw Google News URLs", () => {
     },
   ]);
 
-  assert.doesNotMatch(text, /news\.google\.com\/rss\/articles/);
+  assert.doesNotMatch(visibleTextFromHtml(text), /news\.google\.com\/rss\/articles/);
+  assert.match(text, /<a href="https:\/\/news\.google\.com\/rss\/articles\/CBMiVeryLongGoogleRedirect">Читати джерело<\/a>/);
   assert.match(text, /Технології/);
 });

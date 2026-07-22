@@ -4,6 +4,7 @@ import test from "node:test";
 import { getConfig } from "../src/config.js";
 import { prepareMaterialContext } from "../src/context.js";
 import { createDatabase } from "../src/db.js";
+import { visibleTextFromHtml } from "../src/editorial.js";
 import { formatPublication } from "../src/telegram.js";
 import { classifyMaterialProfile } from "../src/topics.js";
 import { resolveGoogleNewsUrl } from "../src/urlResolver.js";
@@ -19,7 +20,8 @@ test("Telegram publication does not expose long Google News RSS URL and uses hyp
   });
 
   assert.doesNotMatch(text, /news\.google\.com\/rss\/articles/);
-  assert.match(text, /<a href="https:\/\/example\.com\/source">https:\/\/example\.com\/source<\/a>/);
+  assert.match(text, /<a href="https:\/\/example\.com\/source">Читати джерело<\/a>/);
+  assert.doesNotMatch(visibleTextFromHtml(text), /https:\/\/example\.com\/source/);
 });
 
 test("post suppresses generic professional context when OpenAI context generation fails", async () => {

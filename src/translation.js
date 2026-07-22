@@ -1,4 +1,9 @@
-import { cleanTitle, deterministicUkrainianTitle } from "./editorial.js";
+import {
+  cleanTitle,
+  correctUkrainianTitle,
+  deterministicUkrainianTitle,
+  hasObviousRussianTitleWords,
+} from "./editorial.js";
 
 function countMatches(value, pattern) {
   return [...String(value ?? "").matchAll(pattern)].length;
@@ -14,7 +19,7 @@ function responseText(payload) {
 }
 
 export function titleForDisplay(material) {
-  return cleanTitle(
+  return correctUkrainianTitle(cleanTitle(
     material?.displayTitleUk ??
     material?.display_title_uk ??
     material?.translatedTitle ??
@@ -24,7 +29,7 @@ export function titleForDisplay(material) {
     material?.title ??
     "",
     material?.source_name ?? material?.sourceName,
-  );
+  ));
 }
 
 export function isMostlyCyrillicTitle(title) {
@@ -39,6 +44,7 @@ export function needsUkrainianTitle(title) {
   const text = String(title ?? "").trim();
   if (!text) return false;
   if (/[ёыэъ]/i.test(text)) return true;
+  if (hasObviousRussianTitleWords(text)) return true;
   return !isMostlyCyrillicTitle(text);
 }
 
@@ -82,10 +88,11 @@ export async function translateTitleToUkrainian(
     }
 
     const translatedTitle = responseText(payload).replace(/\s+/g, " ").trim();
+    const cleanedTitle = correctUkrainianTitle(translatedTitle || originalTitle);
     return {
-      title: translatedTitle || originalTitle,
+      title: cleanedTitle,
       translated: Boolean(translatedTitle),
-      failed: !translatedTitle,
+      failed: !translatedTitle || hasObviousRussianTitleWords(cleanedTitle),
     };
   } catch (error) {
     logger.warn?.("Title translation failed", error);

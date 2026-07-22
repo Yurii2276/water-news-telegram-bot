@@ -3,6 +3,7 @@ import test from "node:test";
 
 import { discoverAllSources } from "../src/collector.js";
 import { createEditorPipeline, saveRejected } from "../src/editor.js";
+import { visibleTextFromHtml } from "../src/editorial.js";
 import { formatPublication } from "../src/telegram.js";
 
 function candidate(title, suffix) {
@@ -107,9 +108,9 @@ test("fallback Telegram post uses title, source, URL and optional snippet", () =
   });
   assert.match(text, /Тарифи на воду змінилися/);
   assert.match(text, /Приклад джерела/);
-  assert.match(text, /https:\/\/example\.com\/water/);
-  assert.match(text, /💧 <b>Водна безпека<\/b>/);
-  assert.match(text, /🔗 <a href="https:\/\/example\.com\/water">https:\/\/example\.com\/water<\/a>/);
+  assert.match(text, /💰 <b>Тарифи<\/b>/);
+  assert.match(text, /🔗 <a href="https:\/\/example\.com\/water">Читати джерело<\/a>/);
+  assert.doesNotMatch(visibleTextFromHtml(text), /https:\/\/example\.com\/water/);
   assert.doesNotMatch(text, /Матеріал стосується водного сектору/);
   assert.doesNotMatch(text, /Чому це важливо/);
 });
@@ -238,7 +239,7 @@ test("pipeline still journals OpenAI errors for valid articles", async () => {
 });
 
 test("mindev HTTP 403 is logged and discovery continues", async () => {
-  const errors = [];
+  const warnings = [];
   const emptyRss = "<?xml version=\"1.0\"?><rss><channel></channel></rss>";
   const fetchImpl = async (url) => {
     if (url.includes("mindev.gov.ua")) {
@@ -250,8 +251,9 @@ test("mindev HTTP 403 is logged and discovery continues", async () => {
   const result = await discoverAllSources({
     googleNewsRssUrl: "https://news.google.com/rss/test",
     fetchImpl,
-    logger: { error: (...args) => errors.push(args) },
+    logger: { error: () => {}, warn: (...args) => warnings.push(args) },
   });
   assert.deepEqual(result, []);
-  assert.ok(errors.some(([message]) => message.includes("mindev")));
+  assert.ok(warnings.some(([message]) => message.includes("mindev")));
+  assert.equal(result.diagnostics.permanent_failures, 1);
 });

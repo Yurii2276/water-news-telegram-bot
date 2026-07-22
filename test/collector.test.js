@@ -6,8 +6,10 @@ import {
   discoverSitemapLinks,
   OFFICIAL_GOOGLE_NEWS_QUERIES,
   selectRotatingQueries,
+  selectedTargetedQueries,
   TECHNOLOGY_GOOGLE_NEWS_QUERIES,
 } from "../src/collector.js";
+import { GOOGLE_NEWS_ONLY_SOURCE_IDS, OFFICIAL_SOURCES } from "../src/sources.js";
 
 const source = {
   id: "official",
@@ -84,9 +86,9 @@ test("targeted Google News queries are limited to four per scan", async () => {
   assert.equal(items.diagnostics.google_queries_executed, 5);
 });
 
-test("query selection rotates by UTC date", () => {
-  const first = selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 2, new Date("2026-07-15T23:59:00Z"));
-  const second = selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 2, new Date("2026-07-16T00:01:00Z"));
+test("query selection rotates by Europe/Kyiv date", () => {
+  const first = selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 2, new Date("2026-07-15T20:59:00Z"));
+  const second = selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 2, new Date("2026-07-15T21:01:00Z"));
 
   assert.equal(first.length, 2);
   assert.equal(second.length, 2);
@@ -163,4 +165,90 @@ test("a failed source does not abort discovery", async () => {
 
   assert.ok(items.some((item) => item.url === "https://publisher.example/water"));
   assert.ok(items.diagnostics.source_fetch_failures > 0);
+});
+
+test("known donor organizations are google_news_only and are not directly fetched", async () => {
+  const directUrls = [];
+  const emptyRss = "<?xml version=\"1.0\"?><rss><channel></channel></rss>";
+  const fetchImpl = async (url) => {
+    directUrls.push(url);
+    return { ok: true, status: 200, url, headers: { get: () => null }, text: async () => emptyRss };
+  };
+
+  const items = await discoverAllSources({
+    googleNewsRssUrl: "https://news.google.com/rss/search?q=water",
+    fetchImpl,
+    logger: { error: () => {}, warn: () => {}, info: () => {} },
+    sleep: async () => {},
+  });
+  const knownFailingIds = ["unicef_ukraine", "undp_ukraine", "world_bank_ukraine", "ebrd_ukraine", "usaid_ukraine"];
+  for (const sourceId of knownFailingIds) {
+    const source = OFFICIAL_SOURCES.find((item) => item.id === sourceId);
+    assert.ok(GOOGLE_NEWS_ONLY_SOURCE_IDS.has(sourceId));
+    assert.equal(source.discoveryMode, "google_news_only");
+    assert.equal(directUrls.includes(source.listingUrl), false);
+  }
+  assert.equal(items.diagnostics.direct_sources_skipped_google_news_only, 5);
+  assert.ok(selectedTargetedQueries(new Date("2026-07-15T21:01:00Z")).some((query) => /worldbank|ebrd|eib|unicef|who|oecd|ec\.europa|unwater/i.test(query)));
+});
+
+test("repeated permanent source failure enters cooldown and skips later direct fetch", async () => {
+  const health = new Map();
+  const sourceHealthStore = {
+    async isSourceInCooldown(sourceId, now) {
+      const entry = health.get(sourceId);
+      return Boolean(entry?.cooldown_until && new Date(entry.cooldown_until) > now);
+    },
+    async recordSourceFetchSuccess(sourceId) {
+      const previous = health.get(sourceId);
+      health.set(sourceId, { status: "recovered", consecutive: 0, cooldown_until: null });
+      return previous && previous.status !== "recovered" ? "recovered" : "ok";
+    },
+    async recordSourceFetchFailure(sourceId, { status, statusCode, threshold, cooldownHours }) {
+      const previous = health.get(sourceId) ?? { consecutive: 0 };
+      const consecutive = status === "blocked" || status === "permanent_failure" ? previous.consecutive + 1 : 0;
+      const entry = {
+        status,
+        last_status_code: statusCode,
+        consecutive,
+        cooldown_until: consecutive >= threshold ? new Date(Date.parse("2026-07-15T09:00:00Z") + cooldownHours * 60 * 60 * 1000).toISOString() : null,
+      };
+      health.set(sourceId, entry);
+      return entry;
+    },
+  };
+  const calls = [];
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    if (url.includes("mindev.gov.ua")) {
+      return { ok: false, status: 403, url, headers: { get: () => null }, text: async () => "blocked" };
+    }
+    return { ok: true, status: 200, url, headers: { get: () => null }, text: async () => "<?xml version=\"1.0\"?><rss><channel></channel></rss>" };
+  };
+
+  for (let index = 0; index < 3; index += 1) {
+    await discoverAllSources({
+      googleNewsRssUrl: "https://news.google.com/rss/search?q=water",
+      fetchImpl,
+      logger: { error: () => {}, warn: () => {}, info: () => {} },
+      sourceHealthStore,
+      sourcePermanentFailureThreshold: 3,
+      sourcePermanentFailureCooldownHours: 168,
+      now: new Date("2026-07-15T09:00:00Z"),
+      sleep: async () => {},
+    });
+  }
+  const beforeCooldownCalls = calls.filter((url) => url.includes("mindev.gov.ua")).length;
+  const after = await discoverAllSources({
+    googleNewsRssUrl: "https://news.google.com/rss/search?q=water",
+    fetchImpl,
+    logger: { error: () => {}, warn: () => {}, info: () => {} },
+    sourceHealthStore,
+    now: new Date("2026-07-16T09:00:00Z"),
+    sleep: async () => {},
+  });
+
+  assert.equal(beforeCooldownCalls, 3);
+  assert.equal(calls.filter((url) => url.includes("mindev.gov.ua")).length, 3);
+  assert.equal(after.diagnostics.direct_sources_skipped_cooldown, 1);
 });

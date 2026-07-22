@@ -1,5 +1,11 @@
 import { contextForDisplay } from "./context.js";
-import { publicCategoryEmoji, publicCategoryLabel } from "./editorial.js";
+import {
+  buildPublicDescription,
+  publicCategoryEmoji,
+  publicCategoryLabel,
+  SOURCE_LINK_TEXT,
+  validatePublicMessage,
+} from "./editorial.js";
 import { titleForDisplay } from "./translation.js";
 
 const API_BASE_URL = "https://api.telegram.org";
@@ -14,6 +20,10 @@ export function escapeHtml(value) {
 
 export function escapeHtmlAttribute(value) {
   return escapeHtml(value).replaceAll("'", "&#39;");
+}
+
+export function formatSourceLink(url) {
+  return url ? `🔗 <a href="${escapeHtmlAttribute(url)}">${escapeHtml(SOURCE_LINK_TEXT)}</a>` : null;
 }
 
 function decisionOf(material) {
@@ -43,14 +53,14 @@ function materialCategory(material) {
 }
 
 export function formatPublication(material) {
-  if (material.editor_text) return material.editor_text;
+  if (material.editor_text) return validatePublicMessage(material.editor_text);
   const label = publicCategoryLabel(material) ?? CATEGORY_LABELS_UK[materialCategory(material)] ?? CATEGORY_LABELS_UK.general_news;
   const source = material.source_name ?? material.sourceName ?? "Джерело";
   const url = material.url ?? "";
   const displayTitle = titleForDisplay(material);
-  const context = contextForDisplay(material);
+  const context = material.publicDescriptionUk ?? material.public_description_uk ?? buildPublicDescription(material) ?? contextForDisplay(material);
 
-  return [
+  const text = [
     `${publicCategoryEmoji(material)} <b>${escapeHtml(label)}</b>`,
     "",
     `<b>${escapeHtml(displayTitle)}</b>`,
@@ -58,11 +68,12 @@ export function formatPublication(material) {
     context ? escapeHtml(context) : null,
     "",
     `Джерело: ${escapeHtml(source)}`,
-    url ? `🔗 <a href="${escapeHtmlAttribute(url)}">${escapeHtml(url)}</a>` : null,
+    formatSourceLink(url),
   ]
     .filter((line) => line !== undefined && line !== null)
     .join("\n")
     .slice(0, 4096);
+  return validatePublicMessage(text);
 }
 
 export function createTelegramClient(token, { fetchImpl = fetch } = {}) {
@@ -93,7 +104,7 @@ export function createTelegramClient(token, { fetchImpl = fetch } = {}) {
     sendMessage: (chatId, text, extra = {}) =>
       call("sendMessage", {
         chat_id: chatId,
-        text,
+        text: validatePublicMessage(text),
         parse_mode: "HTML",
         link_preview_options: { is_disabled: true },
         ...extra,

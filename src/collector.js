@@ -1,6 +1,6 @@
 import * as cheerio from "cheerio";
 import { parseNewsFeed } from "./news.js";
-import { OFFICIAL_SOURCES, sourceForUrl } from "./sources.js";
+import { isGoogleNewsOnlySource, OFFICIAL_SOURCES, sourceForUrl } from "./sources.js";
 import { preliminaryFilter } from "./topics.js";
 import { isGoogleNewsUrl, resolveGoogleNewsUrl } from "./urlResolver.js";
 
@@ -36,6 +36,30 @@ export const TECHNOLOGY_GOOGLE_NEWS_QUERIES = [
   "leak detection water networks",
 ];
 
+export const INTERNATIONAL_INSTITUTION_GOOGLE_NEWS_QUERIES = [
+  "site:worldbank.org water wastewater utility infrastructure Ukraine",
+  "site:ebrd.com water wastewater municipal infrastructure Ukraine",
+  "site:eib.org water wastewater infrastructure Ukraine",
+  "site:unwater.org water sanitation report",
+  "site:who.int water sanitation WASH",
+  "site:unicef.org water sanitation WASH Ukraine",
+  "site:oecd.org water governance tariffs utilities",
+  "site:ec.europa.eu water wastewater directive Ukraine",
+];
+
+export const GLOBAL_TECHNOLOGY_GOOGLE_NEWS_QUERIES = [
+  "site:iwa-network.org water utility technology",
+  "site:watereurope.eu water innovation",
+  "site:smartwatermagazine.com smart water utility",
+  "site:waterworld.com water utility technology",
+  "\"non-revenue water\" utility project",
+  "\"digital twin\" water utility",
+  "\"leak detection\" water network",
+  "wastewater reuse utility project",
+  "energy efficiency water utility",
+  "AI water utility operations",
+];
+
 export const PERSONNEL_GOOGLE_NEWS_QUERIES = [
   "водоканал призначили директор керівник",
   "НКРЕКП призначення звільнення",
@@ -47,26 +71,45 @@ const TRANSIENT_HTTP_STATUSES = new Set([429, 500, 502, 503, 504]);
 const TRANSIENT_ERROR_CODES = new Set(["ECONNRESET", "ETIMEDOUT"]);
 const RETRY_DELAYS_MS = [0, 2_000, 5_000];
 
-function utcDayIndex(now = new Date()) {
-  return Math.floor(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) / 86_400_000);
+export function kyivDayIndex(now = new Date()) {
+  const dateKey = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Europe/Kyiv",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(now);
+  return Math.floor(Date.parse(`${dateKey}T00:00:00Z`) / 86_400_000);
 }
 
 export function selectRotatingQueries(queries, count, now = new Date()) {
   if (!Array.isArray(queries) || queries.length === 0 || count <= 0) return [];
   const selected = [];
-  const start = utcDayIndex(now) % queries.length;
+  const start = kyivDayIndex(now) % queries.length;
   for (let index = 0; index < Math.min(count, queries.length); index += 1) {
     selected.push(queries[(start + index) % queries.length]);
   }
   return selected;
 }
 
-function selectedTargetedQueries(now = new Date()) {
+export function selectedTargetedQueries(now = new Date(), { internationalNewsEnabled = true } = {}) {
   return [
     ...selectRotatingQueries(OFFICIAL_GOOGLE_NEWS_QUERIES, 1, now),
     ...selectRotatingQueries(PERSONNEL_GOOGLE_NEWS_QUERIES, 1, now),
-    ...selectRotatingQueries(TECHNOLOGY_GOOGLE_NEWS_QUERIES, 2, now),
-  ];
+    ...(internationalNewsEnabled
+      ? [
+        ...selectRotatingQueries(INTERNATIONAL_INSTITUTION_GOOGLE_NEWS_QUERIES, 1, now),
+        ...selectRotatingQueries(GLOBAL_TECHNOLOGY_GOOGLE_NEWS_QUERIES, 1, now),
+      ]
+      : selectRotatingQueries(TECHNOLOGY_GOOGLE_NEWS_QUERIES, 2, now)),
+  ].slice(0, 4);
+}
+
+function isPermanentHttpFailure(error) {
+  return error?.status === 403 || error?.status === 404;
+}
+
+function permanentFailureStatus(error) {
+  return error?.status === 403 ? "blocked" : "permanent_failure";
 }
 
 function retryAfterMs(response) {
@@ -216,16 +259,48 @@ function attachDiagnostics(candidates, diagnostics) {
   return candidates;
 }
 
-export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchImpl = fetch, logger = console, now = new Date(), sleep = sleepDefault } = {}) {
+export async function discoverAllSources({
+  googleNewsRssUrl,
+  limit = 20,
+  fetchImpl = fetch,
+  logger = console,
+  now = new Date(),
+  sleep = sleepDefault,
+  sourceHealthStore = null,
+  internationalNewsEnabled = true,
+  sourcePermanentFailureThreshold = 3,
+  sourcePermanentFailureCooldownHours = 168,
+} = {}) {
   const candidates = [];
   const diagnostics = {
     source_fetch_failures: 0,
     transient_retries: 0,
     google_queries_executed: 0,
+    direct_sources_attempted: 0,
+    direct_sources_skipped_google_news_only: 0,
+    direct_sources_skipped_cooldown: 0,
+    transient_failures: 0,
+    permanent_failures: 0,
+    recovered_sources: 0,
+    candidates_discovered: 0,
+    story_clusters: 0,
+    standalone_eligible: 0,
+    insufficient_public_context: 0,
   };
   const fetchOptions = { logger, diagnostics, sleep };
   for (const source of OFFICIAL_SOURCES) {
+    if (isGoogleNewsOnlySource(source)) {
+      diagnostics.direct_sources_skipped_google_news_only += 1;
+      logger.info?.(`Skipping direct discovery for google_news_only source: ${source.id}`);
+      continue;
+    }
+    if (await sourceHealthStore?.isSourceInCooldown?.(source.id, now)) {
+      diagnostics.direct_sources_skipped_cooldown += 1;
+      logger.warn?.(`Skipping source in cooldown: ${source.id}`);
+      continue;
+    }
     try {
+      diagnostics.direct_sources_attempted += 1;
       if (source.feedUrl) {
         const { text } = await fetchText(source.feedUrl, fetchImpl, 15_000, fetchOptions);
         const items = await feedCandidates(
@@ -247,9 +322,35 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
         const { text } = await fetchText(source.listingUrl, fetchImpl, 15_000, fetchOptions);
         candidates.push(...discoverOfficialLinks(text, source, limit));
       }
+      const healthResult = await sourceHealthStore?.recordSourceFetchSuccess?.(source.id);
+      if (healthResult === "recovered") diagnostics.recovered_sources += 1;
     } catch (error) {
       diagnostics.source_fetch_failures += 1;
-      logger.error(`Source discovery failed: ${source.id}`, error);
+      if (isPermanentHttpFailure(error)) {
+        diagnostics.permanent_failures += 1;
+        const health = await sourceHealthStore?.recordSourceFetchFailure?.(source.id, {
+          status: permanentFailureStatus(error),
+          statusCode: error.status,
+          error: error.message,
+          threshold: sourcePermanentFailureThreshold,
+          cooldownHours: sourcePermanentFailureCooldownHours,
+        });
+        if (health?.cooldown_until) {
+          logger.warn?.(`Source discovery cooldown: ${source.id} until ${health.cooldown_until}`);
+        } else {
+          logger.warn?.(`Source discovery permanent failure: ${source.id} HTTP ${error.status}`);
+        }
+      } else {
+        diagnostics.transient_failures += 1;
+        await sourceHealthStore?.recordSourceFetchFailure?.(source.id, {
+          status: "transient_failure",
+          statusCode: error.status ?? null,
+          error: error.message,
+          threshold: sourcePermanentFailureThreshold,
+          cooldownHours: sourcePermanentFailureCooldownHours,
+        });
+        logger.error(`Source discovery failed: ${source.id}`, error);
+      }
     }
   }
   try {
@@ -272,7 +373,7 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
     logger.error("Google News discovery failed", error);
   }
   const base = new URL(googleNewsRssUrl);
-  for (const query of selectedTargetedQueries(now)) {
+  for (const query of selectedTargetedQueries(now, { internationalNewsEnabled })) {
     try {
       const url = new URL(base);
       url.searchParams.set("q", query);
@@ -295,6 +396,7 @@ export async function discoverAllSources({ googleNewsRssUrl, limit = 20, fetchIm
       logger.error(`Google News targeted discovery failed: ${query}`, error);
     }
   }
+  diagnostics.candidates_discovered = candidates.length;
   return attachDiagnostics(candidates, diagnostics);
 }
 
