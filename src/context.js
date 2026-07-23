@@ -1,5 +1,11 @@
 import { needsUkrainianTitle } from "./translation.js";
-import { factualExtract, validatePublicContext } from "./editorial.js";
+import {
+  buildPublicDescription,
+  factualExtract,
+  publicDescriptionSourceBasis,
+  validatePublicContext,
+  validatePublicDescription,
+} from "./editorial.js";
 
 function decisionOf(material) {
   return material?.ai_decision ?? material?.aiDecision ?? {};
@@ -119,7 +125,124 @@ export async function generateProfessionalContext(
   }
 }
 
+export async function generatePublicDescription(
+  material,
+  { apiKey, model = "gpt-5.4-mini", fetchImpl = fetch, logger = console } = {},
+) {
+  const fallback = buildPublicDescription(material);
+  if (!apiKey) {
+    return {
+      description: fallback,
+      generated: false,
+      failed: !fallback,
+      reason: fallback ? null : "insufficient_source_facts",
+      attempts: 0,
+    };
+  }
+
+  const sourceBasis = publicDescriptionSourceBasis(material).slice(0, 12_000);
+  if (!sourceBasis || sourceBasis.length < 180) {
+    return {
+      description: fallback,
+      generated: false,
+      failed: !fallback,
+      reason: fallback ? null : "insufficient_source_facts",
+      attempts: 0,
+    };
+  }
+
+  const systemPrompt =
+    "Create a standalone public Telegram description for a water-sector news post. " +
+    "Write 5-10 complete professional Ukrainian factual sentences, approximately 700-1800 characters. " +
+    "Use only the supplied source basis. Do not invent facts. Do not add generic filler or repeat the headline. " +
+    "Preserve dates, amounts, percentages and named organizations exactly when they are supplied. " +
+    "Do not add unsupported assessment and do not include raw URLs. Return only the Ukrainian description.";
+
+  async function requestDescription(instruction, previous = "") {
+    const response = await fetchImpl("https://api.openai.com/v1/responses", {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        input: [
+          { role: "system", content: systemPrompt },
+          {
+            role: "user",
+            content: JSON.stringify({
+              instruction,
+              title: material?.displayTitleUk ?? material?.title,
+              source: material?.source_name ?? material?.sourceName,
+              publishedAt: material?.publishedAt ?? material?.published_at ?? null,
+              sourceBasis,
+              previous,
+            }),
+          },
+        ],
+      }),
+      signal: AbortSignal.timeout(20_000),
+    });
+    const payload = await response.json();
+    if (!response.ok) {
+      throw new Error(`OpenAI API error ${response.status}: ${payload.error?.message ?? "unknown"}`);
+    }
+    return String(responseText(payload) ?? "").replace(/\s+/g, " ").trim().slice(0, 1800);
+  }
+
+  try {
+    let description = await requestDescription("Write the public description.");
+    let validation = validatePublicDescription(description, material);
+    let attempts = 1;
+    if (!validation.valid) {
+      attempts += 1;
+      description = await requestDescription(
+        `Correct the previous description. Validation failed with: ${validation.reason}. Keep 5-10 factual Ukrainian sentences and use only the source basis.`,
+        description,
+      );
+      validation = validatePublicDescription(description, material);
+    }
+    if (validation.valid) {
+      return { description: validation.description, generated: true, failed: false, reason: null, attempts };
+    }
+    return {
+      description: fallback,
+      generated: false,
+      failed: !fallback,
+      reason: fallback ? null : validation.reason,
+      attempts,
+    };
+  } catch (error) {
+    logger.warn?.("Public description generation failed", error);
+    return {
+      description: fallback,
+      generated: false,
+      failed: !fallback,
+      reason: fallback ? null : "public_description_validation_failed",
+      attempts: 0,
+    };
+  }
+}
+
 export async function prepareMaterialContext(material, options = {}) {
+  if (options.forPublication) {
+    const existing = validatePublicDescription(material?.publicDescriptionUk ?? material?.public_description_uk, material);
+    if (existing.valid) return material;
+    const result = await generatePublicDescription(material, options);
+    return {
+      ...material,
+      publicDescriptionUk: result.description,
+      professionalContextUk: material?.professionalContextUk ?? material?.professional_context_uk ?? factualExtract(material),
+      publicDescriptionGeneration: {
+        generated: result.generated,
+        failed: result.failed,
+        reason: result.reason,
+        attempts: result.attempts,
+      },
+    };
+  }
+
   if (material?.professionalContextUk || material?.professional_context_uk) return material;
 
   const decision = decisionOf(material);

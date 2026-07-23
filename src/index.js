@@ -46,6 +46,7 @@ const publisher = createAutoPublisher({
     prepareMaterialContext(material, {
       apiKey: config.openAiApiKey,
       model: config.openAiModel,
+      forPublication: true,
     }),
 });
 

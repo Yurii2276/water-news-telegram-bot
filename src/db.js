@@ -95,15 +95,16 @@ export function createDatabase(databaseUrl) {
            source_id, source_name, discovery_method, url, normalized_url,
            title, normalized_title, content, content_hash, status,
            status_reason, preliminary_categories, ai_decision, story_key,
-           source_quality, context_basis, professional_context_uk
-         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+           source_quality, context_basis, professional_context_uk, public_description_uk
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          ON CONFLICT (normalized_url) DO UPDATE SET
            updated_at = NOW(),
            status_reason = EXCLUDED.status_reason,
            story_key = COALESCE(materials.story_key, EXCLUDED.story_key),
            source_quality = COALESCE(materials.source_quality, EXCLUDED.source_quality),
            context_basis = COALESCE(materials.context_basis, EXCLUDED.context_basis),
-           professional_context_uk = COALESCE(materials.professional_context_uk, EXCLUDED.professional_context_uk)
+           professional_context_uk = COALESCE(materials.professional_context_uk, EXCLUDED.professional_context_uk),
+           public_description_uk = COALESCE(materials.public_description_uk, EXCLUDED.public_description_uk)
          RETURNING *`,
         [
           material.sourceId,
@@ -123,6 +124,7 @@ export function createDatabase(databaseUrl) {
           sourceQuality,
           material.contextBasis ?? material.context_basis ?? null,
           material.professionalContextUk ?? material.professional_context_uk ?? null,
+          material.publicDescriptionUk ?? material.public_description_uk ?? null,
         ],
       );
       return rows[0];
@@ -325,6 +327,15 @@ export function createDatabase(databaseUrl) {
     async setEditorText(id, text) {
       const { rows } = await pool.query(
         `UPDATE materials SET editor_text=$2, status='queued', updated_at=NOW()
+         WHERE id=$1 RETURNING *`,
+        [id, text],
+      );
+      return rows[0] ?? null;
+    },
+
+    async setPublicDescription(id, text) {
+      const { rows } = await pool.query(
+        `UPDATE materials SET public_description_uk=$2, updated_at=NOW()
          WHERE id=$1 RETURNING *`,
         [id, text],
       );
