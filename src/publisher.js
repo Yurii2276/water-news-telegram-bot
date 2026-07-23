@@ -95,16 +95,21 @@ export function createAutoPublisher({
         const titledMaterial = await prepareDisplayTitle(verifiedMaterial);
         const publicationMaterial = await prepareContext(titledMaterial);
         const eligibility = standalonePublicationEligibility(publicationMaterial);
-        if (!publicationMaterial.editor_text && !eligibility.eligible) {
+        if (!eligibility.eligible) {
           await repository.setStatus(
             material.id,
             "digest_only",
             eligibility.reason ?? "insufficient_public_context",
           );
+          logger.info?.(`Publication outcome for #${material.id}: digest_only (${eligibility.reason ?? "insufficient_public_context"})`);
           return "digest_only";
+        }
+        if (publicationMaterial.publicDescriptionUk) {
+          await repository.setPublicDescription?.(material.id, publicationMaterial.publicDescriptionUk);
         }
         await telegram.sendMessage(channelId, formatPublication(publicationMaterial));
         await repository.setStatus(material.id, "published", "Automatically published");
+        logger.info?.(`Publication outcome for #${material.id}: published`);
         return "published";
       } catch (error) {
         const terminal = attempt === maxRetries;
@@ -120,6 +125,7 @@ export function createAutoPublisher({
         if (!terminal) await sleep(delayMs);
       }
     }
+    logger.info?.(`Publication outcome for #${material.id}: failed`);
     return "failed";
   }
 
@@ -152,6 +158,7 @@ export function createAutoPublisher({
         simulatedNow += 1;
         if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
         if (isInternationalMaterial(material)) internationalNow += 1;
+        logger.info?.(`Publication outcome for #${material.id}: dry_run`);
       } else if (outcome === "digest_only") {
         digestOnlyNow += 1;
       }

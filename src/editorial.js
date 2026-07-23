@@ -305,13 +305,90 @@ export function buildPublicDescription(material, { minSentences = 5, maxSentence
   return sentences.join(" ").slice(0, 1800);
 }
 
+export function publicDescriptionSourceBasis(material) {
+  return [
+    material?.title,
+    material?.displayTitleUk,
+    material?.source_name ?? material?.sourceName,
+    material?.publishedAt ?? material?.published_at,
+    material?.content,
+    material?.summary,
+    material?.snippet,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export function publicDescriptionSentenceCount(text) {
+  return String(text ?? "")
+    .replace(/\s+/g, " ")
+    .split(/(?<=[.!?])\s+/u)
+    .map((sentence) => sentence.trim())
+    .filter(Boolean)
+    .length;
+}
+
+function extractedNumbers(text) {
+  return [...String(text ?? "").matchAll(/\b\d+(?:[,.]\d+)?\s*(?:%|грн|млн|млрд|тис|км|м³|куб\p{L}*)?/giu)]
+    .map((match) => match[0].replace(/\s+/g, " ").toLocaleLowerCase("uk"));
+}
+
+function extractedDates(text) {
+  return [
+    ...String(text ?? "").matchAll(/\b\d{1,2}\s+(?:січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)(?:\s+\d{4}\s+року)?/giu),
+    ...String(text ?? "").matchAll(/\b\d{4}-\d{2}-\d{2}\b/gu),
+    ...String(text ?? "").matchAll(/\b\d{1,2}\.\d{1,2}\.\d{4}\b/gu),
+  ].map((match) => match[0].replace(/\s+/g, " ").toLocaleLowerCase("uk"));
+}
+
+function unsupportedValues(values, sourceValues) {
+  const source = new Set(sourceValues);
+  return values.filter((value) => !source.has(value));
+}
+
+export function validatePublicDescription(description, material, { minChars = 500 } = {}) {
+  const text = String(description ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return { valid: false, reason: "generated_description_too_short" };
+  if (hasVisibleRawUrl(text)) return { valid: false, reason: "public_description_validation_failed" };
+  if (hasForbiddenGenericContext(text)) return { valid: false, reason: "public_description_validation_failed" };
+  if (hasObviousRussianTitleWords(text)) return { valid: false, reason: "public_description_validation_failed" };
+  const sentenceCount = publicDescriptionSentenceCount(text);
+  if (sentenceCount < 5 || sentenceCount > 10) return { valid: false, reason: "invalid_sentence_count" };
+  if (text.length < minChars) return { valid: false, reason: "generated_description_too_short" };
+
+  const sourceBasis = publicDescriptionSourceBasis(material);
+  if (!sourceBasis || words(sourceBasis).length < 8) return { valid: false, reason: "insufficient_source_facts" };
+  if (!contextHasSourceFacts(text, sourceBasis)) return { valid: false, reason: "public_description_validation_failed" };
+
+  const unsupportedDates = unsupportedValues(extractedDates(text), extractedDates(sourceBasis));
+  if (unsupportedDates.length) return { valid: false, reason: "unsupported_dates", unsupportedDates };
+  const unsupportedNumbers = unsupportedValues(extractedNumbers(text), extractedNumbers(sourceBasis));
+  if (unsupportedNumbers.length) return { valid: false, reason: "unsupported_numbers", unsupportedNumbers };
+  return { valid: true, description: text, sentenceCount };
+}
+
 export function standalonePublicationEligibility(material) {
   const basis = material?.contextBasis ?? material?.context_basis ?? "title";
+  const publicDescription = material?.publicDescriptionUk ?? material?.public_description_uk;
+  const publicValidation = validatePublicDescription(publicDescription, material);
+  if (publicValidation.valid) return { eligible: true, description: publicValidation.description, basis };
+  if (material?.editor_text) {
+    try {
+      validatePublicMessage(material.editor_text);
+      const editorValidation = validatePublicDescription(visibleTextFromHtml(material.editor_text), material);
+      if (editorValidation.valid) return { eligible: true, description: editorValidation.description, basis };
+      return { eligible: false, reason: editorValidation.reason, basis };
+    } catch {
+      return { eligible: false, reason: "public_description_validation_failed", basis };
+    }
+  }
   const description = buildPublicDescription(material);
   if (description) return { eligible: true, description, basis };
   return {
     eligible: false,
-    reason: basis === "title_only" ? "title_only" : "insufficient_public_context",
+    reason: publicDescription ? publicValidation.reason : (basis === "title_only" ? "title_only" : "insufficient_public_context"),
     basis,
   };
 }
