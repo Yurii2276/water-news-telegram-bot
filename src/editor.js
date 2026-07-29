@@ -22,6 +22,7 @@ function createReport(discovered) {
     rejected: 0,
     duplicates: 0,
     accepted_title_keyword_fallback: 0,
+    accepted_ai_unavailable_fallback: 0,
     normative_act: 0,
     google_news_resolved_url: 0,
     google_news_unresolved_url: 0,
@@ -110,6 +111,25 @@ function fallbackDecision(candidate, keyword, preliminaryCategories = []) {
     fallbackKeyword: keyword,
     contextBasis: snippet ? "rss_snippet" : "title_only",
   }, candidate, preliminaryCategories);
+}
+
+function aiUnavailableDecision(article, preliminaryCategories = [], error = undefined) {
+  const summary = String(article.summary ?? article.snippet ?? "").trim();
+  const category = preliminaryCategories[0] ?? "water_supply";
+  return enrichDecisionWithProfile({
+    relevant: true,
+    relevanceScore: 75,
+    category,
+    importance: 60,
+    confidence: "medium",
+    confidenceScore: 70,
+    summary,
+    whyImportant: "",
+    hashtags: ["#вода"],
+    aiUnavailableFallback: true,
+    aiError: String(error?.message ?? error ?? "OpenAI unavailable").slice(0, 300),
+    contextBasis: article.content ? "full_article" : summary ? "rss_snippet" : "title_only",
+  }, article, preliminaryCategories);
 }
 
 async function extractForFallback(candidate, extract, logger) {
@@ -271,21 +291,21 @@ export function createEditorPipeline({
           continue;
         }
         let decision;
+        let aiUnavailable = false;
         try {
           decision = enrichDecisionWithProfile(await classify(article), article, contentFilter.categories);
         } catch (error) {
-          const reason = `OpenAI error: ${error.message}`;
-          logger.error(`OpenAI classification failed: ${article.url}`, error);
-          await saveRejected(repository, article, "rejected_ai_error", reason, contentFilter.categories);
-          recordRejection(report, article, "openaiError", reason);
-          existing.push(article);
-          continue;
+          logger.error(`OpenAI classification failed; deterministic fallback used: ${article.url}`, error);
+          decision = aiUnavailableDecision(article, contentFilter.categories, error);
+          aiUnavailable = true;
         }
 
         const saved = await repository.saveMaterial({
           ...enrichMaterialForStorage(article, decision),
           status: decision.relevant ? "queued" : "rejected_ai",
-          statusReason: decision.rejectionReason || null,
+          statusReason: aiUnavailable
+            ? "Accepted by deterministic fallback because OpenAI classification was unavailable"
+            : decision.rejectionReason || null,
           preliminaryCategories: contentFilter.categories,
           aiDecision: decision,
         });
@@ -293,6 +313,7 @@ export function createEditorPipeline({
 
         if (decision.relevant) {
           report.queued += 1;
+          if (aiUnavailable) report.accepted_ai_unavailable_fallback += 1;
           recordAccepted(report, article, contentFilter.categories);
           await onQueued(saved);
         } else {
