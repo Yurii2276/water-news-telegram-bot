@@ -220,7 +220,7 @@ test("international smart water and wastewater technology title is accepted with
   assert.equal(saved[0].aiDecision.materialCategory, "international_tech");
 });
 
-test("pipeline still journals OpenAI errors for valid articles", async () => {
+test("trusted relevant articles use deterministic fallback when OpenAI is unavailable", async () => {
   const item = candidate("Стан водопровідної мережі громади", "ai-error");
   const saved = [];
   const pipeline = createEditorPipeline({
@@ -234,8 +234,12 @@ test("pipeline still journals OpenAI errors for valid articles", async () => {
     logger: { error: () => {} },
   });
   const report = await pipeline.scan();
-  assert.equal(report.rejectedBy.openaiError, 1);
-  assert.ok(saved.some((material) => material.status === "rejected_ai_error"));
+  assert.equal(report.queued, 1);
+  assert.equal(report.rejectedBy.openaiError, 0);
+  assert.equal(report.accepted_ai_unavailable_fallback, 1);
+  assert.equal(saved[0].status, "queued");
+  assert.equal(saved[0].aiDecision.relevant, true);
+  assert.equal(saved[0].aiDecision.aiUnavailableFallback, true);
 });
 
 test("mindev HTTP 403 is logged and discovery continues", async () => {
