@@ -32,6 +32,28 @@ export function scheduleDaily(task, hourUtc, { minuteUtc = 0, logger = console }
   };
 }
 
+export function scheduleEveryHours(task, hours = 3, { runImmediately = false, logger = console } = {}) {
+  const intervalMs = Math.max(1, hours) * 60 * 60 * 1000;
+  let running = false;
+
+  const run = async () => {
+    if (running) return;
+    running = true;
+    try {
+      await task();
+    } catch (error) {
+      logger.error("Scheduled recurring task failed", error);
+    } finally {
+      running = false;
+    }
+  };
+
+  if (runImmediately) queueMicrotask(run);
+  const timer = setInterval(run, intervalMs);
+  timer.unref?.();
+  return () => clearInterval(timer);
+}
+
 export function timeZoneParts(date, timeZone = "Europe/Kyiv") {
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone,
