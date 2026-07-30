@@ -1,6 +1,7 @@
 import { createUpdateHandler, runPolling, sendDailyDigest } from "./bot.js";
 import { classifyArticle } from "./ai.js";
-import { discoverAllSources, extractArticle } from "./collector.js";
+import { extractArticle } from "./collector.js";
+import { discoverFreshSources } from "./freshDiscovery.js";
 import { getConfig, loadEnvironmentFile } from "./config.js";
 import { createDatabase } from "./db.js";
 import { createEditorPipeline } from "./editor.js";
@@ -9,7 +10,7 @@ import {
   createAutoPublisher,
   sendDailyTechnicalReport,
 } from "./publisher.js";
-import { scheduleDaily } from "./scheduler.js";
+import { scheduleDaily, scheduleEveryHours } from "./scheduler.js";
 import { scheduleDailyLocal, scheduleWeeklyLocal, timeZoneParts } from "./scheduler.js";
 import { createTelegramClient } from "./telegram.js";
 import { prepareMaterialDisplayTitle } from "./translation.js";
@@ -52,20 +53,22 @@ const publisher = createAutoPublisher({
 
 const pipeline = createEditorPipeline({
   discover: () =>
-    discoverAllSources({
+    discoverFreshSources({
       googleNewsRssUrl: config.newsRssUrl,
-      limit: config.newsLimit,
+      limit: Math.max(config.newsLimit, 30),
       sourceHealthStore: repository,
       internationalNewsEnabled: config.internationalNewsEnabled,
       sourcePermanentFailureThreshold: config.sourcePermanentFailureThreshold,
       sourcePermanentFailureCooldownHours: config.sourcePermanentFailureCooldownHours,
+      maxAgeDays: 5,
+      passes: 3,
     }),
   extract: (candidate) => extractArticle(candidate),
   classify: (article) =>
     classifyArticle(article, {
       apiKey: config.openAiApiKey,
       model: config.openAiModel,
-  }),
+    }),
   repository,
   onQueued: () => publisher.kick(),
 });
@@ -110,9 +113,10 @@ const morningScan = createEmptyScanRetryController({
   maxRetries: config.emptyScanMaxRetries,
   adminNotification: config.emptyScanAdminNotification,
 });
-const stopScheduler = scheduleDaily(
+const stopScheduler = scheduleEveryHours(
   () => morningScan.runScheduledScan(),
-  config.dailyScanHourUtc,
+  3,
+  { runImmediately: true },
 );
 const stopReportScheduler = scheduleDaily(
   () =>
