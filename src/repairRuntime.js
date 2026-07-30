@@ -86,5 +86,9 @@ globalThis.fetch = async function resilientFetch(input, init = {}) {
   throw lastError;
 };
 
-await repairDatabase();
+try {
+  await repairDatabase();
+} finally {
+  await repairPool.end();
+}
 await import("./index.js");
