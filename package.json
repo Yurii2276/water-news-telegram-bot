@@ -4,10 +4,10 @@
   "private": true,
   "description": "AI-assisted editorial workflow for Ukrainian water-sector news.",
   "type": "module",
-  "main": "src/index.js",
+  "main": "src/repairRuntime.js",
   "scripts": {
-    "start": "node src/index.js",
-    "dev": "node --watch src/index.js",
+    "start": "node src/repairRuntime.js",
+    "dev": "node --watch src/repairRuntime.js",
     "test": "node --test"
   },
   "engines": {
