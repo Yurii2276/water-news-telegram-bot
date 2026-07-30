@@ -125,6 +125,51 @@ export const OFFICIAL_SOURCES = [
   },
 ];
 
+const TRUSTED_DISCOVERY_SOURCES = [
+  {
+    id: "suspilne",
+    category: "general_news",
+    name: "Суспільне",
+    hosts: ["suspilne.media"],
+  },
+  {
+    id: "ukrinform",
+    category: "general_news",
+    name: "Укрінформ",
+    hosts: ["ukrinform.ua"],
+  },
+  {
+    id: "interfax_ukraine",
+    category: "general_news",
+    name: "Інтерфакс-Україна",
+    hosts: ["interfax.com.ua"],
+  },
+  {
+    id: "economic_truth",
+    category: "general_news",
+    name: "Економічна правда",
+    hosts: ["epravda.com.ua"],
+  },
+  {
+    id: "liga",
+    category: "general_news",
+    name: "LIGA.net",
+    hosts: ["liga.net"],
+  },
+  {
+    id: "nv",
+    category: "general_news",
+    name: "NV",
+    hosts: ["nv.ua"],
+  },
+  {
+    id: "decentralization",
+    category: "government",
+    name: "Децентралізація",
+    hosts: ["decentralization.gov.ua"],
+  },
+];
+
 export const GOOGLE_NEWS_SOURCE_CATEGORY = "general_news";
 export const GOOGLE_NEWS_ONLY_SOURCE_IDS = new Set(
   OFFICIAL_SOURCES.filter((source) => source.discoveryMode === "google_news_only").map((source) => source.id),
@@ -136,17 +181,49 @@ export function isGoogleNewsOnlySource(source) {
 
 export function sourceCategoryForId(sourceId) {
   if (sourceId === "google_news") return GOOGLE_NEWS_SOURCE_CATEGORY;
-  return OFFICIAL_SOURCES.find((source) => source.id === sourceId)?.category ?? null;
+  return [...OFFICIAL_SOURCES, ...TRUSTED_DISCOVERY_SOURCES]
+    .find((source) => source.id === sourceId)?.category ?? null;
 }
 
-export function sourceForUrl(value) {
-  let host;
+function hostForUrl(value) {
   try {
-    host = new URL(value).hostname.toLowerCase().replace(/^www\./, "");
+    return new URL(value).hostname.toLowerCase().replace(/^www\./, "");
   } catch {
     return null;
   }
-  return OFFICIAL_SOURCES.find((source) =>
-    source.hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`)),
-  );
+}
+
+function matchesHost(source, host) {
+  return source.hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`));
+}
+
+export function sourceForUrl(value) {
+  const host = hostForUrl(value);
+  if (!host) return null;
+
+  const registered = [...OFFICIAL_SOURCES, ...TRUSTED_DISCOVERY_SOURCES]
+    .find((source) => matchesHost(source, host));
+  if (registered) return registered;
+
+  if (host === "gov.ua" || host.endsWith(".gov.ua")) {
+    return {
+      id: `official_${host.replace(/[^a-z0-9]+/g, "_")}`,
+      category: "government",
+      name: host,
+      hosts: [host],
+      dynamic: true,
+    };
+  }
+
+  if (/vodokanal|waterutility|water-utility/i.test(host)) {
+    return {
+      id: `vodokanal_${host.replace(/[^a-z0-9]+/g, "_")}`,
+      category: "vodokanal",
+      name: host,
+      hosts: [host],
+      dynamic: true,
+    };
+  }
+
+  return null;
 }
