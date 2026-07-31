@@ -190,6 +190,10 @@ function enrichMaterialForStorage(material, aiDecision = undefined) {
   };
 }
 
+function discoveredViaGoogleNews(candidate) {
+  return candidate?.sourceId === "google_news" || String(candidate?.discoveryMethod ?? "").startsWith("google_news");
+}
+
 export async function saveRejected(repository, material, status, reason, categories = []) {
   if (!isValidHttpUrl(material?.url)) return null;
   return repository.saveMaterial({
@@ -245,6 +249,7 @@ export function createEditorPipeline({
         const fallback = originalFallback.accepted
           ? { ...originalFallback, category: null }
           : rescueTitleFallback(candidate);
+
         if (fallback.accepted) {
           const fallbackArticle = await extractForFallback(candidate, extract, logger);
           const decision = fallbackDecision(fallbackArticle, fallback, initialFilter.categories);
@@ -258,7 +263,7 @@ export function createEditorPipeline({
           const saved = await repository.saveMaterial({
             ...acceptedMaterial,
             status: "queued",
-            statusReason: `Accepted by title keyword fallback: ${fallback.keyword}`,
+            statusReason: `Accepted by water-sector headline rescue: ${fallback.keyword}`,
             preliminaryCategories: initialFilter.categories,
             aiDecision: decision,
           });
@@ -266,11 +271,12 @@ export function createEditorPipeline({
           report.queued += 1;
           report.accepted_title_keyword_fallback += 1;
           recordAccepted(report, acceptedMaterial, initialFilter.categories);
-          await onQueued(saved);
+          await onQueued(saved ?? acceptedMaterial);
           continue;
         }
 
-        if (!initialFilter.relevant) {
+        const deepInspectionAllowed = discoveredViaGoogleNews(candidate);
+        if (!initialFilter.relevant && !deepInspectionAllowed) {
           await saveRejected(repository, candidate, "filtered_out", initialFilter.reason);
           recordRejection(report, candidate, "irrelevant", initialFilter.reason);
           continue;
@@ -296,7 +302,7 @@ export function createEditorPipeline({
           continue;
         }
 
-        if (!article.sourceTrusted) {
+        if (!article.sourceTrusted && !discoveredViaGoogleNews(candidate)) {
           const reason = "Посилання не належить надійному джерелу";
           await saveRejected(repository, article, "rejected_source", reason, initialFilter.categories);
           recordRejection(report, article, "missingContentOrLink", reason);
@@ -315,11 +321,19 @@ export function createEditorPipeline({
           recordRejection(report, article, "irrelevant", "Noise-only item without water-sector utility context");
           continue;
         }
+
         let decision;
         let aiUnavailable = false;
         try {
           decision = enrichDecisionWithProfile(await classify(article), article, contentFilter.categories);
         } catch (error) {
+          if (!article.sourceTrusted && !contentFilter.relevant) {
+            const reason = "OpenAI недоступний, а детермінований фільтр не підтвердив водний контекст";
+            logger.error(`OpenAI classification failed for untrusted non-water source: ${article.url}`, error);
+            await saveRejected(repository, article, "filtered_out", reason, contentFilter.categories);
+            recordRejection(report, article, "openaiError", reason);
+            continue;
+          }
           logger.error(`OpenAI classification failed; deterministic fallback used: ${article.url}`, error);
           decision = aiUnavailableDecision(article, contentFilter.categories, error);
           aiUnavailable = true;
@@ -344,7 +358,7 @@ export function createEditorPipeline({
           report.queued += 1;
           if (aiUnavailable) report.accepted_ai_unavailable_fallback += 1;
           recordAccepted(report, acceptedMaterial, contentFilter.categories);
-          await onQueued(saved);
+          await onQueued(saved ?? acceptedMaterial);
         } else {
           recordRejection(report, article, "irrelevant", decision.rejectionReason || "AI визначив матеріал нерелевантним");
         }
