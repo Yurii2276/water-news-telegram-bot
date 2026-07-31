@@ -43,7 +43,6 @@ async function repairDatabase() {
         'duplicate',
         'filtered_out',
         'rejected_source',
-        'rejected_ai',
         'rejected_ai_error'
       ) THEN
         RETURN NULL;
@@ -73,7 +72,6 @@ async function repairDatabase() {
         'duplicate',
         'filtered_out',
         'rejected_source',
-        'rejected_ai',
         'rejected_ai_error'
       )
   `);
@@ -87,6 +85,13 @@ async function repairDatabase() {
         AND created_at >= NOW() - INTERVAL '7 days'
         AND length(content) >= 180
         AND COALESCE(context_basis, '') <> 'title_only'
+        AND status_reason IN (
+          'insufficient_public_context',
+          'generated_description_too_short',
+          'invalid_sentence_count',
+          'public_description_validation_failed',
+          'insufficient_compact_public_context'
+        )
       ORDER BY
         CASE ai_decision->>'priorityLevel'
           WHEN 'high' THEN 0
@@ -95,11 +100,11 @@ async function repairDatabase() {
           ELSE 1
         END,
         created_at DESC
-      LIMIT 5
+      LIMIT 18
     )
     UPDATE materials
     SET status = 'queued',
-        status_reason = 'Requeued for compact grounded publication',
+        status_reason = 'Requeued for grounded compact publication',
         public_description_uk = NULL,
         next_publish_at = NULL,
         last_publish_error = NULL,
