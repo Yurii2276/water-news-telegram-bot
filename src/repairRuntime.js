@@ -35,6 +35,27 @@ async function repairDatabase() {
     BEFORE UPDATE ON materials
     FOR EACH ROW
     EXECUTE FUNCTION preserve_material_timestamp_for_duplicate();
+
+    CREATE OR REPLACE FUNCTION discard_nonblocking_material_row()
+    RETURNS trigger AS $$
+    BEGIN
+      IF NEW.status IN (
+        'duplicate',
+        'filtered_out',
+        'rejected_source',
+        'rejected_ai_error'
+      ) THEN
+        RETURN NULL;
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS materials_discard_nonblocking_insert ON materials;
+    CREATE TRIGGER materials_discard_nonblocking_insert
+    BEFORE INSERT ON materials
+    FOR EACH ROW
+    EXECUTE FUNCTION discard_nonblocking_material_row();
   `);
 
   const normalized = await repairPool.query(`
@@ -44,22 +65,60 @@ async function repairDatabase() {
       AND status_reason LIKE 'Duplicate by %'
   `);
 
-  const recovered = await repairPool.query(`
+  const removedNonblockingRows = await repairPool.query(`
+    DELETE FROM materials
+    WHERE published_at IS NULL
+      AND status IN (
+        'duplicate',
+        'filtered_out',
+        'rejected_source',
+        'rejected_ai_error'
+      )
+  `);
+
+  const requeuedDigest = await repairPool.query(`
+    WITH candidates AS (
+      SELECT id
+      FROM materials
+      WHERE status = 'digest_only'
+        AND published_at IS NULL
+        AND created_at >= NOW() - INTERVAL '7 days'
+        AND length(content) >= 180
+        AND COALESCE(context_basis, '') <> 'title_only'
+        AND status_reason IN (
+          'insufficient_public_context',
+          'generated_description_too_short',
+          'invalid_sentence_count',
+          'public_description_validation_failed',
+          'insufficient_compact_public_context'
+        )
+      ORDER BY
+        CASE ai_decision->>'priorityLevel'
+          WHEN 'high' THEN 0
+          WHEN 'medium' THEN 1
+          WHEN 'low' THEN 2
+          ELSE 1
+        END,
+        created_at DESC
+      LIMIT 18
+    )
     UPDATE materials
     SET status = 'queued',
-        status_reason = 'Recovered after OpenAI quota restoration',
+        status_reason = 'Requeued for grounded compact publication',
+        public_description_uk = NULL,
         next_publish_at = NULL,
         last_publish_error = NULL,
         publish_attempts = 0,
         updated_at = NOW()
-    WHERE status = 'rejected_ai_error'
-      AND published_at IS NULL
-      AND length(content) >= 300
-      AND created_at >= NOW() - INTERVAL '14 days'
+    WHERE id IN (SELECT id FROM candidates)
   `);
 
   console.log(
-    `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}, recovered AI-rejected news=${recovered.rowCount}`,
+    [
+      `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
+      `removed nonblocking dedup rows=${removedNonblockingRows.rowCount}`,
+      `requeued digest news=${requeuedDigest.rowCount}`,
+    ].join(", "),
   );
 }
 
