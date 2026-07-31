@@ -1,4 +1,5 @@
 import { findDuplicate, isValidHttpUrl } from "./dedup.js";
+import { resolvedDedupPool, shouldRunCandidateDedup } from "./dedupPolicy.js";
 import {
   SOURCE_CATEGORIES,
   PRIORITY_LEVELS,
@@ -210,11 +211,14 @@ export function createEditorPipeline({
           recordRejection(report, candidate, "irrelevant", "Noise-only item without water-sector utility context");
           continue;
         }
-        const candidateDuplicate = findDuplicate(candidate, existing);
-        if (candidateDuplicate.duplicate) {
-          await saveRejected(repository, candidate, "duplicate", `Duplicate by ${candidateDuplicate.reason}`, initialFilter.categories);
-          report.duplicates += 1;
-          continue;
+
+        if (shouldRunCandidateDedup(candidate)) {
+          const candidateDuplicate = findDuplicate(candidate, existing);
+          if (candidateDuplicate.duplicate) {
+            await saveRejected(repository, candidate, "duplicate", `Duplicate by ${candidateDuplicate.reason}`, initialFilter.categories);
+            report.duplicates += 1;
+            continue;
+          }
         }
 
         const fallback = titleKeywordFallback(candidate.title);
@@ -222,7 +226,7 @@ export function createEditorPipeline({
           const fallbackArticle = await extractForFallback(candidate, extract, logger);
           const decision = fallbackDecision(fallbackArticle, fallback.keyword, initialFilter.categories);
           const material = enrichMaterialForStorage(fallbackArticle, decision);
-          const storyDuplicate = findDuplicate(material, existing);
+          const storyDuplicate = findDuplicate(material, resolvedDedupPool(existing, candidate));
           if (storyDuplicate.duplicate) {
             await saveRejected(repository, material, "duplicate", `Duplicate by ${storyDuplicate.reason}`, initialFilter.categories);
             report.duplicates += 1;
@@ -276,7 +280,7 @@ export function createEditorPipeline({
           continue;
         }
 
-        const duplicate = findDuplicate(article, existing);
+        const duplicate = findDuplicate(article, resolvedDedupPool(existing, candidate));
         if (duplicate.duplicate) {
           await saveRejected(repository, article, "duplicate", `Duplicate by ${duplicate.reason}`, initialFilter.categories);
           report.duplicates += 1;
