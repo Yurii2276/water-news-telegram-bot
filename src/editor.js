@@ -8,6 +8,7 @@ import {
   preliminaryFilter,
   titleKeywordFallback,
 } from "./topics.js";
+import { rescueTitleFallback } from "./relevanceRescue.js";
 import {
   createStoryKey,
   inferSourceQuality,
@@ -21,6 +22,14 @@ function createReport(discovered) {
     queued: 0,
     rejected: 0,
     duplicates: 0,
+    duplicateBy: {
+      url: 0,
+      title: 0,
+      story: 0,
+      content: 0,
+      other: 0,
+    },
+    duplicateItems: [],
     accepted_title_keyword_fallback: 0,
     accepted_ai_unavailable_fallback: 0,
     normative_act: 0,
@@ -80,27 +89,39 @@ function recordRejection(report, candidate, type, reason) {
   }
 }
 
+function recordDuplicate(report, candidate, duplicate) {
+  const reason = duplicate?.reason ?? "other";
+  report.duplicates += 1;
+  report.duplicateBy[reason] = (report.duplicateBy[reason] ?? 0) + 1;
+  if (report.duplicateItems.length < 10) {
+    report.duplicateItems.push({
+      title: candidate?.title || "(без заголовка)",
+      reason,
+      matchedTitle: duplicate?.material?.title ?? null,
+      matchedId: duplicate?.material?.id ?? null,
+    });
+  }
+}
+
 function fallbackCategory(keyword) {
   if (/НКРЕКП|закон|стратег/i.test(keyword)) return "legislation";
-  if (/тариф|інвестиційн|вартість/i.test(keyword)) return "tariffs";
+  if (/тариф|інвестиційн|вартість|коштує|подорожча/i.test(keyword)) return "tariffs";
   if (/WASH|донор|world bank|ebrd|unicef|undp|usaid/i.test(keyword)) return "donors";
   if (/smart water|leak detection|non-revenue|wastewater treatment|sludge|digital water|desalination/i.test(keyword)) return "technology";
   if (/очисн|водовідвед|каналізаці/i.test(keyword)) return "wastewater";
-  if (/питн|якість/i.test(keyword)) return "drinking_water";
+  if (/питн|якість|забруднен|колодяз/i.test(keyword)) return "drinking_water";
+  if (/відключ|перекрит|без води|не буде води/i.test(keyword)) return "outages";
   if (/водоканал|водогін|водопровод|водопостач|втрати води/i.test(keyword)) return "water_supply";
-  if (/тариф|вартість/i.test(keyword)) return "tariffs";
-  if (/водоканал|зношені мережі|втрати води/i.test(keyword)) return "utilities";
-  if (/водовідвед/i.test(keyword)) return "wastewater";
-  if (/питн|каламут/i.test(keyword)) return "drinking_water";
+  if (/комунальн/i.test(keyword)) return "utilities";
   return "water_supply";
 }
 
-function fallbackDecision(candidate, keyword, preliminaryCategories = []) {
+function fallbackDecision(candidate, fallback, preliminaryCategories = []) {
   const snippet = String(candidate.summary ?? candidate.snippet ?? "").trim();
   return enrichDecisionWithProfile({
     relevant: true,
     relevanceScore: 90,
-    category: fallbackCategory(keyword),
+    category: fallback.category ?? fallbackCategory(fallback.keyword),
     importance: 60,
     confidence: "high",
     confidenceScore: 90,
@@ -108,7 +129,7 @@ function fallbackDecision(candidate, keyword, preliminaryCategories = []) {
     whyImportant: "",
     hashtags: ["#вода"],
     titleKeywordFallback: true,
-    fallbackKeyword: keyword,
+    fallbackKeyword: fallback.keyword,
     contextBasis: snippet ? "rss_snippet" : "title_only",
   }, candidate, preliminaryCategories);
 }
@@ -212,33 +233,35 @@ export function createEditorPipeline({
         }
         const candidateDuplicate = findDuplicate(candidate, existing);
         if (candidateDuplicate.duplicate) {
-          await saveRejected(repository, candidate, "duplicate", `Duplicate by ${candidateDuplicate.reason}`, initialFilter.categories);
-          report.duplicates += 1;
+          recordDuplicate(report, candidate, candidateDuplicate);
           continue;
         }
 
-        const fallback = titleKeywordFallback(candidate.title);
+        const originalFallback = titleKeywordFallback(candidate.title);
+        const fallback = originalFallback.accepted
+          ? { ...originalFallback, category: null }
+          : rescueTitleFallback(candidate);
         if (fallback.accepted) {
           const fallbackArticle = await extractForFallback(candidate, extract, logger);
-          const decision = fallbackDecision(fallbackArticle, fallback.keyword, initialFilter.categories);
+          const decision = fallbackDecision(fallbackArticle, fallback, initialFilter.categories);
           const material = enrichMaterialForStorage(fallbackArticle, decision);
           const storyDuplicate = findDuplicate(material, existing);
           if (storyDuplicate.duplicate) {
-            await saveRejected(repository, material, "duplicate", `Duplicate by ${storyDuplicate.reason}`, initialFilter.categories);
-            report.duplicates += 1;
+            recordDuplicate(report, material, storyDuplicate);
             continue;
           }
+          const acceptedMaterial = { ...material, aiDecision: decision };
           const saved = await repository.saveMaterial({
-            ...material,
+            ...acceptedMaterial,
             status: "queued",
             statusReason: `Accepted by title keyword fallback: ${fallback.keyword}`,
             preliminaryCategories: initialFilter.categories,
             aiDecision: decision,
           });
-          existing.push(material);
+          existing.push(saved ?? acceptedMaterial);
           report.queued += 1;
           report.accepted_title_keyword_fallback += 1;
-          recordAccepted(report, material, initialFilter.categories);
+          recordAccepted(report, acceptedMaterial, initialFilter.categories);
           await onQueued(saved);
           continue;
         }
@@ -278,8 +301,7 @@ export function createEditorPipeline({
 
         const duplicate = findDuplicate(article, existing);
         if (duplicate.duplicate) {
-          await saveRejected(repository, article, "duplicate", `Duplicate by ${duplicate.reason}`, initialFilter.categories);
-          report.duplicates += 1;
+          recordDuplicate(report, article, duplicate);
           continue;
         }
 
@@ -287,7 +309,6 @@ export function createEditorPipeline({
         if (isNoiseOnly(article)) {
           await saveRejected(repository, article, "filtered_out", "Noise-only item without water-sector utility context", contentFilter.categories);
           recordRejection(report, article, "irrelevant", "Noise-only item without water-sector utility context");
-          existing.push(article);
           continue;
         }
         let decision;
@@ -300,8 +321,12 @@ export function createEditorPipeline({
           aiUnavailable = true;
         }
 
-        const saved = await repository.saveMaterial({
+        const acceptedMaterial = {
           ...enrichMaterialForStorage(article, decision),
+          aiDecision: decision,
+        };
+        const saved = await repository.saveMaterial({
+          ...acceptedMaterial,
           status: decision.relevant ? "queued" : "rejected_ai",
           statusReason: aiUnavailable
             ? "Accepted by deterministic fallback because OpenAI classification was unavailable"
@@ -309,12 +334,12 @@ export function createEditorPipeline({
           preliminaryCategories: contentFilter.categories,
           aiDecision: decision,
         });
-        existing.push(article);
 
         if (decision.relevant) {
+          existing.push(saved ?? acceptedMaterial);
           report.queued += 1;
           if (aiUnavailable) report.accepted_ai_unavailable_fallback += 1;
-          recordAccepted(report, article, contentFilter.categories);
+          recordAccepted(report, acceptedMaterial, contentFilter.categories);
           await onQueued(saved);
         } else {
           recordRejection(report, article, "irrelevant", decision.rejectionReason || "AI визначив матеріал нерелевантним");
