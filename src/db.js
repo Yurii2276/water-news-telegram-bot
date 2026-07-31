@@ -374,24 +374,52 @@ export function createDatabase(databaseUrl) {
       { status = "transient_failure", statusCode = null, error = "", threshold = 3, cooldownHours = 168 } = {},
     ) {
       const permanent = status === "permanent_failure" || status === "blocked";
-      const cooldownExpression = permanent
-        ? `CASE WHEN source_health.consecutive_permanent_failures + 1 >= $5 THEN NOW() + ($6 * INTERVAL '1 hour') ELSE source_health.cooldown_until END`
-        : `source_health.cooldown_until`;
+      const safeThreshold = Math.max(1, Number.parseInt(threshold, 10) || 3);
+      const safeCooldownHours = Math.max(1, Number.parseInt(cooldownHours, 10) || 168);
       const { rows } = await pool.query(
         `INSERT INTO source_health (
            source_id, status, consecutive_permanent_failures, last_status_code, last_error,
            cooldown_until, last_failure_at, updated_at
-         ) VALUES ($1,$2,CASE WHEN $3 THEN 1 ELSE 0 END,$4,$7,NULL,NOW(),NOW())
+         ) VALUES (
+           $1,
+           $2,
+           CASE WHEN $3::boolean THEN 1 ELSE 0 END,
+           $4,
+           $7,
+           CASE
+             WHEN $3::boolean AND 1 >= $5::integer
+               THEN NOW() + ($6::integer * INTERVAL '1 hour')
+             ELSE NULL
+           END,
+           NOW(),
+           NOW()
+         )
          ON CONFLICT (source_id) DO UPDATE SET
            status=$2,
-           consecutive_permanent_failures=CASE WHEN $3 THEN source_health.consecutive_permanent_failures + 1 ELSE 0 END,
+           consecutive_permanent_failures=CASE
+             WHEN $3::boolean THEN source_health.consecutive_permanent_failures + 1
+             ELSE 0
+           END,
            last_status_code=$4,
            last_error=$7,
-           cooldown_until=${cooldownExpression},
+           cooldown_until=CASE
+             WHEN $3::boolean
+               AND source_health.consecutive_permanent_failures + 1 >= $5::integer
+               THEN NOW() + ($6::integer * INTERVAL '1 hour')
+             ELSE source_health.cooldown_until
+           END,
            last_failure_at=NOW(),
            updated_at=NOW()
          RETURNING *`,
-        [sourceId, status, permanent, statusCode, threshold, cooldownHours, String(error).slice(0, 500)],
+        [
+          sourceId,
+          status,
+          permanent,
+          statusCode,
+          safeThreshold,
+          safeCooldownHours,
+          String(error).slice(0, 500),
+        ],
       );
       return rows[0];
     },
