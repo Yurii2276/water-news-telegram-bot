@@ -35,6 +35,28 @@ async function repairDatabase() {
     BEFORE UPDATE ON materials
     FOR EACH ROW
     EXECUTE FUNCTION preserve_material_timestamp_for_duplicate();
+
+    CREATE OR REPLACE FUNCTION discard_nonblocking_material_row()
+    RETURNS trigger AS $$
+    BEGIN
+      IF NEW.status IN (
+        'duplicate',
+        'filtered_out',
+        'rejected_source',
+        'rejected_ai',
+        'rejected_ai_error'
+      ) THEN
+        RETURN NULL;
+      END IF;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS materials_discard_nonblocking_insert ON materials;
+    CREATE TRIGGER materials_discard_nonblocking_insert
+    BEFORE INSERT ON materials
+    FOR EACH ROW
+    EXECUTE FUNCTION discard_nonblocking_material_row();
   `);
 
   const normalized = await repairPool.query(`
@@ -44,43 +66,16 @@ async function repairDatabase() {
       AND status_reason LIKE 'Duplicate by %'
   `);
 
-  const removedDuplicateRows = await repairPool.query(`
-    DELETE FROM materials
-    WHERE status = 'duplicate'
-      AND published_at IS NULL
-  `);
-
-  const reopenedTransientRows = await repairPool.query(`
+  const removedNonblockingRows = await repairPool.query(`
     DELETE FROM materials
     WHERE published_at IS NULL
-      AND created_at >= NOW() - INTERVAL '14 days'
-      AND (
-        status IN ('rejected_source', 'rejected_ai_error')
-        OR (
-          status = 'filtered_out'
-          AND (
-            status_reason LIKE 'Extraction error:%'
-            OR status_reason IN (
-              'Не вдалося визначити посилання на першоджерело',
-              'Недостатньо тексту першоджерела'
-            )
-          )
-        )
+      AND status IN (
+        'duplicate',
+        'filtered_out',
+        'rejected_source',
+        'rejected_ai',
+        'rejected_ai_error'
       )
-  `);
-
-  const recovered = await repairPool.query(`
-    UPDATE materials
-    SET status = 'queued',
-        status_reason = 'Recovered after OpenAI quota restoration',
-        next_publish_at = NULL,
-        last_publish_error = NULL,
-        publish_attempts = 0,
-        updated_at = NOW()
-    WHERE status = 'rejected_ai_error'
-      AND published_at IS NULL
-      AND length(content) >= 300
-      AND created_at >= NOW() - INTERVAL '14 days'
   `);
 
   const requeuedDigest = await repairPool.query(`
@@ -123,9 +118,7 @@ async function repairDatabase() {
   console.log(
     [
       `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
-      `removed duplicate-only rows=${removedDuplicateRows.rowCount}`,
-      `reopened transient rows=${reopenedTransientRows.rowCount}`,
-      `recovered AI-rejected news=${recovered.rowCount}`,
+      `removed nonblocking dedup rows=${removedNonblockingRows.rowCount}`,
       `requeued digest news=${requeuedDigest.rowCount}`,
     ].join(", "),
   );
