@@ -1,5 +1,6 @@
 import { discoverAllSources } from "./collector.js";
 import { normalizeUrl } from "./dedup.js";
+import { discoverUkraineWaterSector } from "./sectorDiscovery.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -17,6 +18,16 @@ function mergeDiagnostics(target, source = {}) {
   }
 }
 
+function appendUnique(target, seen, candidates, now, maxAgeDays) {
+  for (const candidate of candidates) {
+    if (!isRecent(candidate, now, maxAgeDays)) continue;
+    const key = normalizeUrl(candidate.url) ?? `${candidate.sourceId}:${candidate.title}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    target.push(candidate);
+  }
+}
+
 export async function discoverFreshSources(options = {}) {
   const now = options.now ?? new Date();
   const maxAgeDays = options.maxAgeDays ?? 5;
@@ -29,15 +40,16 @@ export async function discoverFreshSources(options = {}) {
     const passNow = new Date(now.getTime() + pass * DAY_MS);
     const candidates = await discoverAllSources({ ...options, now: passNow });
     mergeDiagnostics(diagnostics, candidates.diagnostics);
-
-    for (const candidate of candidates) {
-      if (!isRecent(candidate, now, maxAgeDays)) continue;
-      const key = normalizeUrl(candidate.url) ?? `${candidate.sourceId}:${candidate.title}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(candidate);
-    }
+    appendUnique(merged, seen, candidates, now, maxAgeDays);
   }
+
+  const sectorCandidates = await discoverUkraineWaterSector({
+    fetchImpl: options.fetchImpl,
+    logger: options.logger,
+    limitPerQuery: Math.max(5, Math.ceil((options.limit ?? 30) / 5)),
+  });
+  mergeDiagnostics(diagnostics, sectorCandidates.diagnostics);
+  appendUnique(merged, seen, sectorCandidates, now, Math.min(maxAgeDays, 3));
 
   diagnostics.candidates_discovered = merged.length;
   Object.defineProperty(merged, "diagnostics", {
