@@ -44,6 +44,31 @@ async function repairDatabase() {
       AND status_reason LIKE 'Duplicate by %'
   `);
 
+  const removedDuplicateRows = await repairPool.query(`
+    DELETE FROM materials
+    WHERE status = 'duplicate'
+      AND published_at IS NULL
+  `);
+
+  const reopenedTransientRows = await repairPool.query(`
+    DELETE FROM materials
+    WHERE published_at IS NULL
+      AND created_at >= NOW() - INTERVAL '14 days'
+      AND (
+        status IN ('rejected_source', 'rejected_ai_error')
+        OR (
+          status = 'filtered_out'
+          AND (
+            status_reason LIKE 'Extraction error:%'
+            OR status_reason IN (
+              'Не вдалося визначити посилання на першоджерело',
+              'Недостатньо тексту першоджерела'
+            )
+          )
+        )
+      )
+  `);
+
   const recovered = await repairPool.query(`
     UPDATE materials
     SET status = 'queued',
@@ -58,8 +83,51 @@ async function repairDatabase() {
       AND created_at >= NOW() - INTERVAL '14 days'
   `);
 
+  const requeuedDigest = await repairPool.query(`
+    WITH candidates AS (
+      SELECT id
+      FROM materials
+      WHERE status = 'digest_only'
+        AND published_at IS NULL
+        AND created_at >= NOW() - INTERVAL '7 days'
+        AND length(content) >= 180
+        AND COALESCE(context_basis, '') <> 'title_only'
+        AND status_reason IN (
+          'insufficient_public_context',
+          'generated_description_too_short',
+          'invalid_sentence_count',
+          'public_description_validation_failed',
+          'insufficient_compact_public_context'
+        )
+      ORDER BY
+        CASE ai_decision->>'priorityLevel'
+          WHEN 'high' THEN 0
+          WHEN 'medium' THEN 1
+          WHEN 'low' THEN 2
+          ELSE 1
+        END,
+        created_at DESC
+      LIMIT 10
+    )
+    UPDATE materials
+    SET status = 'queued',
+        status_reason = 'Requeued for compact grounded publication',
+        public_description_uk = NULL,
+        next_publish_at = NULL,
+        last_publish_error = NULL,
+        publish_attempts = 0,
+        updated_at = NOW()
+    WHERE id IN (SELECT id FROM candidates)
+  `);
+
   console.log(
-    `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}, recovered AI-rejected news=${recovered.rowCount}`,
+    [
+      `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
+      `removed duplicate-only rows=${removedDuplicateRows.rowCount}`,
+      `reopened transient rows=${reopenedTransientRows.rowCount}`,
+      `recovered AI-rejected news=${recovered.rowCount}`,
+      `requeued digest news=${requeuedDigest.rowCount}`,
+    ].join(", "),
   );
 }
 
