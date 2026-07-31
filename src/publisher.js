@@ -4,6 +4,7 @@ import {
   publicCategoryKey,
   standalonePublicationEligibility,
 } from "./editorial.js";
+import { compactStandalonePublicationEligibility } from "./compactPublication.js";
 import { sourceForUrl } from "./sources.js";
 import { formatPublication } from "./telegram.js";
 
@@ -93,8 +94,22 @@ export function createAutoPublisher({
           ? { ...material, url: verification.url, resolvedUrl: verification.url }
           : material;
         const titledMaterial = await prepareDisplayTitle(verifiedMaterial);
-        const publicationMaterial = await prepareContext(titledMaterial);
-        const eligibility = standalonePublicationEligibility(publicationMaterial);
+        let publicationMaterial = await prepareContext(titledMaterial);
+        let eligibility = standalonePublicationEligibility(publicationMaterial);
+
+        if (!eligibility.eligible) {
+          const compactEligibility = compactStandalonePublicationEligibility(publicationMaterial);
+          if (compactEligibility.eligible) {
+            publicationMaterial = {
+              ...publicationMaterial,
+              publicDescriptionUk: compactEligibility.description,
+              compactDescriptionFallback: true,
+            };
+            eligibility = compactEligibility;
+            logger.info?.(`Publication outcome for #${material.id}: compact_fallback`);
+          }
+        }
+
         if (!eligibility.eligible) {
           await repository.setStatus(
             material.id,
