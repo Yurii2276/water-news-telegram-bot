@@ -3,29 +3,47 @@ import * as cheerio from "cheerio";
 import { isBroadWaterSectorCandidate, isWaterNativeSource } from "./discoveryPolicy.js";
 import { normalizeUrl } from "./dedup.js";
 import { parseNewsFeed } from "./news.js";
-import { OFFICIAL_SOURCES } from "./sources.js";
+import { OFFICIAL_SOURCES, isGoogleNewsOnlySource } from "./sources.js";
 
-const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.7; +https://github.com/Yurii2276/water-news-telegram-bot)";
+const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.8; +https://github.com/Yurii2276/water-news-telegram-bot)";
 const TRANSIENT = new Set([429, 500, 502, 503, 504]);
 const GOOGLE_TRANSIENT = new Set([429, 502, 503, 504]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GOOGLE_MIN_GAP_MS = 1_800;
 
-export const CORE_GOOGLE_QUERIES = [
-  '"водоканал" OR "водопостачання" OR "водовідведення" OR "питна вода" when:3d',
-  '"тариф на воду" OR "якість води" OR "відключення води" OR "аварія водогін" OR "очисні споруди" when:3d',
-];
-
-export const ROTATING_GOOGLE_QUERIES = [
-  '"водна інфраструктура" OR "реконструкція водопроводу" OR "відновлення водопостачання" OR "втрати води" when:5d',
-  'НКРЕКП (водопостачання OR водовідведення OR тариф OR "інвестиційна програма") when:5d',
-  '("World Bank" OR EBRD OR EIB OR UNICEF OR UNDP OR USAID) Ukraine (water OR wastewater OR WASH) when:7d',
-  '("smart water" OR "non-revenue water" OR "leak detection" OR "wastewater treatment") Ukraine when:7d',
-  '("водні ресурси" OR "забруднення води" OR "якість річкової води") Україна when:3d',
-  '(водоканал OR НКРЕКП OR Держводагентство) (директор OR керівник OR призначення OR звільнення) when:7d',
+// Four permanent coverage lanes. Every scan checks the full editorial scope
+// instead of rotating entire categories out of a scan.
+export const COVERAGE_GOOGLE_QUERIES = [
+  '(НКРЕКП OR Мінрозвитку OR "Кабінет Міністрів" OR "Верховна Рада") (водопостачання OR водовідведення OR водоканал OR "тариф на воду" OR "інвестиційна програма" OR "водна інфраструктура") when:5d',
+  '(водоканал OR водопостачання OR водовідведення OR "питна вода" OR "якість води" OR "очисні споруди" OR "аварія на водогоні" OR "відключення води" OR "втрати води") Україна when:3d',
+  '("World Bank" OR EBRD OR EIB OR UNICEF OR UNDP OR "European Commission" OR "Ukraine Facility") (Ukraine water OR Ukraine wastewater OR Ukraine WASH OR "water infrastructure Ukraine") when:7d',
+  '("smart water" OR "digital water" OR "non-revenue water" OR "leak detection" OR "smart metering" OR "digital twin" OR "water utility AI" OR "SCADA water" OR "wastewater treatment" OR "sludge treatment" OR "wastewater reuse" OR "desalination technology" OR "membrane bioreactor") when:7d',
 ];
 
 const sleepDefault = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const UK_MONTHS = new Map([
+  ["січня", 0], ["лютого", 1], ["березня", 2], ["квітня", 3],
+  ["травня", 4], ["червня", 5], ["липня", 6], ["серпня", 7],
+  ["вересня", 8], ["жовтня", 9], ["листопада", 10], ["грудня", 11],
+]);
+
+function dateFromText(value) {
+  const text = String(value ?? "").replace(/\s+/g, " ");
+  let match = text.match(/\b(\d{1,2})[.\/-](\d{1,2})[.\/-](20\d{2})\b/u);
+  if (match) {
+    return new Date(Date.UTC(Number(match[3]), Number(match[2]) - 1, Number(match[1])));
+  }
+  match = text.match(/\b(20\d{2})-(\d{1,2})-(\d{1,2})\b/u);
+  if (match) {
+    return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  }
+  match = text.match(/\b(\d{1,2})\s+(січня|лютого|березня|квітня|травня|червня|липня|серпня|вересня|жовтня|листопада|грудня)\s+(20\d{2})\b/iu);
+  if (match) {
+    return new Date(Date.UTC(Number(match[3]), UK_MONTHS.get(match[2].toLowerCase()), Number(match[1])));
+  }
+  return null;
+}
 
 function isRecent(candidate, now, maxAgeDays) {
   const publishedAt = candidate?.publishedAt ?? candidate?.published_at;
@@ -35,14 +53,8 @@ function isRecent(candidate, now, maxAgeDays) {
   return timestamp >= now.getTime() - maxAgeDays * DAY_MS;
 }
 
-export function selectedHighRecallQueries(now = new Date()) {
-  const slot = Math.floor(now.getTime() / (3 * 60 * 60 * 1000));
-  const start = slot % ROTATING_GOOGLE_QUERIES.length;
-  return [
-    ...CORE_GOOGLE_QUERIES,
-    ROTATING_GOOGLE_QUERIES[start],
-    ROTATING_GOOGLE_QUERIES[(start + 1) % ROTATING_GOOGLE_QUERIES.length],
-  ];
+export function selectedHighRecallQueries() {
+  return [...COVERAGE_GOOGLE_QUERIES];
 }
 
 function googleNewsUrl(query) {
@@ -115,29 +127,37 @@ function directItemRelevant(item, source) {
   });
 }
 
+const NAVIGATION_TITLE = /^(?:головна|про асоціацію|рада|дирекція|учасники|партнери|новини|всі новини|діяльність|обладнання|очистка та знезараження|it-забезпечення|лічильники|call-центр|інвестиційна політика|тарифна політика|кадрова політика|робочі групи|медіа|журнал|фото|відео|календар подій|контакти|юридична консультація|категорія:.*|детальніше)$/iu;
+
 function listingCandidates(html, source, limit) {
   const $ = cheerio.load(html);
   const items = [];
   const seen = new Set();
+  const sourceLimit = Math.max(1, Math.min(limit, source.maxDirectItems ?? 12));
 
   $("a[href]").each((_, element) => {
-    if (items.length >= limit) return;
+    if (items.length >= sourceLimit) return;
     let url;
     try {
       url = new URL($(element).attr("href"), source.listingUrl).toString();
     } catch {
       return;
     }
-    const host = new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, "");
     if (!source.hosts.some((allowed) => host === allowed || host.endsWith(`.${allowed}`))) return;
-    if (source.articlePathPattern && !source.articlePathPattern.test(new URL(url).pathname)) return;
+    if (source.articlePathPattern && !source.articlePathPattern.test(parsed.pathname)) return;
     if (seen.has(url)) return;
 
     const anchor = $(element).text().replace(/\s+/g, " ").trim();
     const label = String($(element).attr("title") ?? $(element).attr("aria-label") ?? "").replace(/\s+/g, " ").trim();
-    const container = $(element).closest("article,li,.news-item,.news,.item,.card").text().replace(/\s+/g, " ").trim();
-    const title = [anchor, label, container].find((value) => value.length >= 18) ?? "";
-    if (!title) return;
+    const containerNode = $(element).closest("article,.post,.blog-post,.news-item,.news,.item,.card,li");
+    const container = (containerNode.length ? containerNode : $(element).parent()).text().replace(/\s+/g, " ").trim();
+    const title = [anchor, label].find((value) => value.length >= 18) ?? "";
+    if (!title || NAVIGATION_TITLE.test(title)) return;
+
+    const publishedAt = dateFromText(container);
+    if (source.requirePublishedDate && !publishedAt) return;
 
     const candidate = {
       title: title.slice(0, 500),
@@ -146,6 +166,9 @@ function listingCandidates(html, source, limit) {
       sourceName: source.name,
       sourceCategory: source.category,
       discoveryMethod: "official",
+      publishedAt,
+      summary: container && container !== title ? container.slice(0, 1200) : undefined,
+      snippet: container && container !== title ? container.slice(0, 1200) : undefined,
     };
     if (!directItemRelevant(candidate, source)) return;
     seen.add(url);
@@ -184,7 +207,7 @@ function sitemapCandidates(xml, source, limit) {
     if (!directItemRelevant(candidate, source)) return;
     items.push(candidate);
   });
-  return items.reverse().slice(0, limit);
+  return items.reverse().slice(0, Math.min(limit, source.maxDirectItems ?? 12));
 }
 
 function pushUnique(target, seen, candidates, now, maxAgeDays) {
@@ -210,6 +233,10 @@ async function discoverDirectSources({
 }) {
   const candidates = [];
   for (const source of OFFICIAL_SOURCES) {
+    if (isGoogleNewsOnlySource(source)) {
+      diagnostics.direct_sources_skipped_google_news_only += 1;
+      continue;
+    }
     if (await sourceHealthStore?.isSourceInCooldown?.(source.id, now)) {
       diagnostics.direct_sources_skipped_cooldown += 1;
       continue;
@@ -217,17 +244,18 @@ async function discoverDirectSources({
     diagnostics.direct_sources_attempted += 1;
     try {
       let discovered = [];
+      const sourceLimit = Math.max(1, Math.min(limit, source.maxDirectItems ?? 12));
       if (source.feedUrl) {
         const { text } = await fetchText(source.feedUrl, { fetchImpl, sleep, logger, diagnostics });
-        discovered = parseNewsFeed(text, limit)
+        discovered = parseNewsFeed(text, sourceLimit)
           .map((item) => candidateFromFeed(item, source))
           .filter((item) => directItemRelevant(item, source));
       } else if (source.sitemapUrl) {
         const { text } = await fetchText(source.sitemapUrl, { fetchImpl, sleep, logger, diagnostics });
-        discovered = sitemapCandidates(text, source, limit);
+        discovered = sitemapCandidates(text, source, sourceLimit);
       } else {
         const { text } = await fetchText(source.listingUrl, { fetchImpl, sleep, logger, diagnostics });
-        discovered = listingCandidates(text, source, limit);
+        discovered = listingCandidates(text, source, sourceLimit);
       }
       candidates.push(...discovered);
       const health = await sourceHealthStore?.recordSourceFetchSuccess?.(source.id);
@@ -289,9 +317,9 @@ async function discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagno
         }
         throw fetchError(url, response.status);
       }
-      const items = parseNewsFeed(await response.text(), Math.max(8, Math.ceil(limit / 2)));
+      const items = parseNewsFeed(await response.text(), Math.max(12, Math.ceil(limit / 2)));
       for (const item of items) {
-        const candidate = {
+        candidates.push({
           ...item,
           url: item.url ?? item.link,
           sourceId: "google_news",
@@ -299,10 +327,7 @@ async function discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagno
           sourceCategory: "general_news",
           discoveryMethod: "google_news_high_recall",
           sectorQuery: query,
-        };
-        // The query itself is water-sector scoped. Keep every result for full-text
-        // inspection so indirect but important headlines are not lost at discovery time.
-        candidates.push(candidate);
+        });
       }
     } catch (error) {
       diagnostics.source_fetch_failures += 1;
@@ -351,10 +376,13 @@ export async function discoverHighRecallSources({
     sourcePermanentFailureCooldownHours,
     diagnostics,
   });
-  pushUnique(merged, seen, direct, now, maxAgeDays);
-
   const google = await discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagnostics });
+
+  // Google first is deliberate: the editor queues materials while scanning. Putting
+  // the four broad coverage lanes first prevents a single direct source from filling
+  // the publisher before regulation, donor and technology candidates are evaluated.
   pushUnique(merged, seen, google, now, maxAgeDays);
+  pushUnique(merged, seen, direct, now, maxAgeDays);
 
   diagnostics.candidates_discovered = merged.length;
   Object.defineProperty(merged, "diagnostics", { value: diagnostics, enumerable: false });

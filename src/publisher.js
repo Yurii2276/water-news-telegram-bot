@@ -10,6 +10,25 @@ import { formatPublication } from "./telegram.js";
 const sleepDefault = (milliseconds) =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+function localDateKey(date = new Date(), timeZone = "Europe/Kyiv") {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+}
+
+function sourceKey(material) {
+  return String(
+    material?.source_id ??
+    material?.sourceId ??
+    material?.source_name ??
+    material?.sourceName ??
+    "unknown",
+  ).toLowerCase();
+}
+
 export async function verifyPrimarySource(
   material,
   { fetchImpl = fetch, logger = console } = {},
@@ -22,7 +41,7 @@ export async function verifyPrimarySource(
   const response = await fetchImpl(material.url, {
     method: "GET",
     redirect: "follow",
-    headers: { "user-agent": "WaterNewsEditor/0.7 source-verification" },
+    headers: { "user-agent": "WaterNewsEditor/0.8 source-verification" },
     signal: AbortSignal.timeout(15_000),
   });
   const resolvedUrl = response.url || material.url;
@@ -69,6 +88,9 @@ export function createAutoPublisher({
   logger = console,
 }) {
   let activePromise = null;
+  let diversityDate = null;
+  const categoryCounts = new Map();
+  const sourceCounts = new Map();
 
   function isInternationalMaterial(material) {
     return ["donor", "international_tech", "technology"].includes(publicCategoryKey(material));
@@ -83,6 +105,57 @@ export function createAutoPublisher({
       material?.source_category ??
       null;
     return explicitCategory === "local_media";
+  }
+
+  function sourceDailyCap(material) {
+    const key = sourceKey(material);
+    if (key === "ukrvodokanal" || key.includes("ukrainian water utilities association")) return 3;
+    return 6;
+  }
+
+  function incrementDiversity(material) {
+    const category = publicCategoryKey(material);
+    const source = sourceKey(material);
+    categoryCounts.set(category, (categoryCounts.get(category) ?? 0) + 1);
+    sourceCounts.set(source, (sourceCounts.get(source) ?? 0) + 1);
+  }
+
+  async function refreshDiversityCounters() {
+    const today = localDateKey(new Date(), publicationCountTimezone);
+    if (today === diversityDate) return;
+    diversityDate = today;
+    categoryCounts.clear();
+    sourceCounts.clear();
+
+    const recent = await repository.getPublished?.(100) ?? [];
+    for (const material of recent) {
+      if (!material?.published_at) continue;
+      if (localDateKey(new Date(material.published_at), publicationCountTimezone) !== today) continue;
+      incrementDiversity(material);
+    }
+  }
+
+  function chooseDiverseMaterial(queue, { localIncidentsNow, internationalNow }) {
+    const eligible = queue.filter((item) => {
+      if (isInternationalMaterial(item) && internationalNow >= maxDailyInternational) return false;
+      if (isLocalIncidentMaterial(item) && localIncidentsNow >= maxLocalIncidents) return false;
+      if ((sourceCounts.get(sourceKey(item)) ?? 0) >= sourceDailyCap(item)) return false;
+      return true;
+    });
+    if (eligible.length === 0) return null;
+
+    // getQueue already returns editorial priority order. Use that order as the
+    // tie-breaker, but prefer a category that has appeared less often today.
+    let best = eligible[0];
+    let bestCount = categoryCounts.get(publicCategoryKey(best)) ?? 0;
+    for (const item of eligible.slice(1)) {
+      const count = categoryCounts.get(publicCategoryKey(item)) ?? 0;
+      if (count < bestCount) {
+        best = item;
+        bestCount = count;
+      }
+    }
+    return best;
   }
 
   async function publishWithRetries(material) {
@@ -155,6 +228,7 @@ export function createAutoPublisher({
   }
 
   async function drain() {
+    await refreshDiversityCounters();
     let publishedToday = await repository.countPublishedToday(publicationCountTimezone);
     let publishedNow = 0;
     let simulatedNow = 0;
@@ -164,23 +238,21 @@ export function createAutoPublisher({
     const effectiveLimit = Math.min(maxDaily, editorialCap);
 
     while (publishedToday < effectiveLimit) {
-      const queue = await repository.getQueue(20);
-      const material = queue.find((item) => {
-        if (isInternationalMaterial(item) && internationalNow >= maxDailyInternational) return false;
-        if (isLocalIncidentMaterial(item) && localIncidentsNow >= maxLocalIncidents) return false;
-        return true;
-      });
+      const queue = await repository.getQueue(50);
+      const material = chooseDiverseMaterial(queue, { localIncidentsNow, internationalNow });
       if (!material) break;
 
       const outcome = await publishWithRetries(material);
       if (outcome === "published") {
         publishedToday += 1;
         publishedNow += 1;
+        incrementDiversity(material);
         if (isLocalIncidentMaterial(material)) localIncidentsNow += 1;
         if (isInternationalMaterial(material)) internationalNow += 1;
         if (publishedToday < effectiveLimit) await sleep(intervalMs);
       } else if (outcome === "dry_run") {
         simulatedNow += 1;
+        incrementDiversity(material);
         if (isLocalIncidentMaterial(material)) localIncidentsNow += 1;
         if (isInternationalMaterial(material)) internationalNow += 1;
         logger.info?.(`Publication outcome for #${material.id}: dry_run`);
