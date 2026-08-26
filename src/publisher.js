@@ -75,7 +75,14 @@ export function createAutoPublisher({
   }
 
   function isLocalIncidentMaterial(material) {
-    return publicCategoryKey(material) === "local_media";
+    const decision = material?.ai_decision ?? material?.aiDecision ?? {};
+    const explicitCategory =
+      decision.materialCategory ??
+      decision.sourceCategory ??
+      material?.sourceCategory ??
+      material?.source_category ??
+      null;
+    return explicitCategory === "local_media";
   }
 
   async function publishWithRetries(material) {
