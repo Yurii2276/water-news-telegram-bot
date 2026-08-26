@@ -1,7 +1,7 @@
 import { createUpdateHandler, runPolling, sendDailyDigest } from "./bot.js";
 import { classifyArticle } from "./ai.js";
-import { extractArticle } from "./collector.js";
-import { discoverFreshSources } from "./freshDiscovery.js";
+import { discoverHighRecallSources } from "./highRecallDiscovery.js";
+import { extractHighRecallArticle } from "./highRecallExtractor.js";
 import { getConfig, loadEnvironmentFile } from "./config.js";
 import { createDatabase } from "./db.js";
 import { createEditorPipeline } from "./editor.js";
@@ -53,17 +53,14 @@ const publisher = createAutoPublisher({
 
 const pipeline = createEditorPipeline({
   discover: () =>
-    discoverFreshSources({
-      googleNewsRssUrl: config.newsRssUrl,
+    discoverHighRecallSources({
       limit: Math.max(config.newsLimit, 30),
       sourceHealthStore: repository,
-      internationalNewsEnabled: config.internationalNewsEnabled,
       sourcePermanentFailureThreshold: config.sourcePermanentFailureThreshold,
       sourcePermanentFailureCooldownHours: config.sourcePermanentFailureCooldownHours,
-      maxAgeDays: 5,
-      passes: 3,
+      maxAgeDays: 7,
     }),
-  extract: (candidate) => extractArticle(candidate),
+  extract: (candidate) => extractHighRecallArticle(candidate),
   classify: (article) =>
     classifyArticle(article, {
       apiKey: config.openAiApiKey,
