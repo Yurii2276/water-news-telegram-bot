@@ -76,6 +76,33 @@ async function repairDatabase() {
       )
   `);
 
+  const requeuedOldThreshold = await repairPool.query(`
+    WITH candidates AS (
+      SELECT id
+      FROM materials
+      WHERE status = 'rejected_ai'
+        AND published_at IS NULL
+        AND created_at >= NOW() - INTERVAL '7 days'
+        AND COALESCE((ai_decision->>'relevanceScore')::int, 0) >= 70
+        AND COALESCE((ai_decision->>'confidenceScore')::int, 0) >= 70
+        AND COALESCE(ai_decision->>'category', 'other') <> 'other'
+        AND (
+          status_reason LIKE 'Релевантність нижче 85%'
+          OR status_reason LIKE 'Рівень довіри нижче 85%'
+        )
+      ORDER BY created_at DESC
+      LIMIT 18
+    )
+    UPDATE materials
+    SET status = 'queued',
+        status_reason = 'Requeued after relevance threshold correction',
+        next_publish_at = NULL,
+        last_publish_error = NULL,
+        publish_attempts = 0,
+        updated_at = NOW()
+    WHERE id IN (SELECT id FROM candidates)
+  `);
+
   const requeuedDigest = await repairPool.query(`
     WITH candidates AS (
       SELECT id
@@ -117,6 +144,7 @@ async function repairDatabase() {
     [
       `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
       `removed nonblocking dedup rows=${removedNonblockingRows.rowCount}`,
+      `requeued old-threshold AI news=${requeuedOldThreshold.rowCount}`,
       `requeued digest news=${requeuedDigest.rowCount}`,
     ].join(", "),
   );
