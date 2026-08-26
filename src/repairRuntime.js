@@ -19,6 +19,11 @@ const repairPool = new Pool({
 
 async function repairDatabase() {
   await repairPool.query(`
+    CREATE TABLE IF NOT EXISTS runtime_migrations (
+      name TEXT PRIMARY KEY,
+      applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE OR REPLACE FUNCTION preserve_material_timestamp_for_duplicate()
     RETURNS trigger AS $$
     BEGIN
@@ -75,6 +80,29 @@ async function repairDatabase() {
         'rejected_ai_error'
       )
   `);
+
+  // PR #23 deliberately broadened the editorial policy (70/70 AI threshold,
+  // wider water-sector scope and better extraction). Recent rejected_ai rows
+  // were created under the old narrow policy and would otherwise remain in the
+  // dedup pool forever, so rediscovered articles would be reported only as
+  // duplicates and could never reach the new classifier. Release those rows
+  // exactly once. New rejections created under the corrected policy are kept.
+  const policyMigration = await repairPool.query(`
+    INSERT INTO runtime_migrations(name)
+    VALUES ('2026-08-26-release-pre-broad-policy-rejected-ai')
+    ON CONFLICT (name) DO NOTHING
+    RETURNING name
+  `);
+  let releasedOldRejectedAi = 0;
+  if (policyMigration.rowCount > 0) {
+    const released = await repairPool.query(`
+      DELETE FROM materials
+      WHERE status = 'rejected_ai'
+        AND published_at IS NULL
+        AND created_at >= NOW() - INTERVAL '14 days'
+    `);
+    releasedOldRejectedAi = released.rowCount;
+  }
 
   const requeuedOldThreshold = await repairPool.query(`
     WITH candidates AS (
@@ -144,6 +172,7 @@ async function repairDatabase() {
     [
       `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
       `removed nonblocking dedup rows=${removedNonblockingRows.rowCount}`,
+      `released old-policy AI rejects=${releasedOldRejectedAi}`,
       `requeued old-threshold AI news=${requeuedOldThreshold.rowCount}`,
       `requeued digest news=${requeuedDigest.rowCount}`,
     ].join(", "),
