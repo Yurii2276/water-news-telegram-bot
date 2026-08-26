@@ -1,5 +1,6 @@
 import { findDuplicate, isValidHttpUrl } from "./dedup.js";
 import { resolvedDedupPool, shouldRunCandidateDedup } from "./dedupPolicy.js";
+import { shouldDeepInspectCandidate } from "./discoveryPolicy.js";
 import {
   SOURCE_CATEGORIES,
   PRIORITY_LEVELS,
@@ -39,6 +40,7 @@ function createReport(discovered) {
     source_fetch_failures: 0,
     transient_retries: 0,
     google_queries_executed: 0,
+    google_circuit_opened: 0,
     direct_sources_attempted: 0,
     direct_sources_skipped_google_news_only: 0,
     direct_sources_skipped_cooldown: 0,
@@ -157,7 +159,12 @@ function aiUnavailableDecision(article, preliminaryCategories = [], error = unde
 async function extractForFallback(candidate, extract, logger) {
   try {
     const article = await extract(candidate);
-    if (article?.extractionStatus === "ok") return { ...article, contextBasis: "full_article" };
+    if (article?.extractionStatus === "ok") {
+      return {
+        ...article,
+        contextBasis: article.contextBasis ?? article.context_basis ?? "full_article",
+      };
+    }
     return {
       ...candidate,
       ...(article ?? {}),
@@ -275,7 +282,7 @@ export function createEditorPipeline({
           continue;
         }
 
-        const deepInspectionAllowed = discoveredViaGoogleNews(candidate);
+        const deepInspectionAllowed = shouldDeepInspectCandidate(candidate);
         if (!initialFilter.relevant && !deepInspectionAllowed) {
           await saveRejected(repository, candidate, "filtered_out", initialFilter.reason);
           recordRejection(report, candidate, "irrelevant", initialFilter.reason);
@@ -365,6 +372,9 @@ export function createEditorPipeline({
       }
 
       report.story_clusters = new Set(existing.map((material) => material.storyKey ?? material.story_key ?? createStoryKey(material))).size;
+      logger.info?.(
+        `Scan outcome: discovered=${report.discovered}, queued=${report.queued}, duplicates=${report.duplicates}, rejected=${report.rejected}, google_queries=${report.google_queries_executed}, direct_sources=${report.direct_sources_attempted}`,
+      );
       return report;
     },
   };

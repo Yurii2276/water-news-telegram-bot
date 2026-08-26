@@ -12,6 +12,27 @@ function textOf(value) {
   return String(value?.["#text"] ?? "").trim();
 }
 
+function decodeEntities(value) {
+  return String(value ?? "")
+    .replaceAll("&nbsp;", " ")
+    .replaceAll("&amp;", "&")
+    .replaceAll("&quot;", '"')
+    .replaceAll("&#39;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">");
+}
+
+function summaryText(value) {
+  const raw = textOf(value);
+  if (!raw) return "";
+  return decodeEntities(raw)
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function validHttpUrl(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   try {
@@ -53,6 +74,30 @@ function extractItemUrl(item) {
   return null;
 }
 
+function extractSourceUrl(item) {
+  return validHttpUrl(
+    item?.source?.["@_url"] ??
+    item?.source?.url ??
+    item?.author?.uri ??
+    item?.author?.url ??
+    "",
+  );
+}
+
+function extractSummary(item) {
+  const values = [
+    item?.description,
+    item?.summary,
+    item?.["content:encoded"],
+    item?.content,
+  ];
+  for (const value of values) {
+    const summary = summaryText(value);
+    if (summary) return summary;
+  }
+  return "";
+}
+
 export function parseNewsFeed(xml, limit = 5) {
   const document = parser.parse(xml);
   const rssItems = asArray(document?.rss?.channel?.item);
@@ -63,6 +108,7 @@ export function parseNewsFeed(xml, limit = 5) {
   return [...rssItems, ...atomItems]
     .map((item) => {
       const url = extractItemUrl(item);
+      const summary = extractSummary(item);
       return {
         title: textOf(item?.title),
         url: url ?? undefined,
@@ -71,6 +117,9 @@ export function parseNewsFeed(xml, limit = 5) {
           ? new Date(item.pubDate ?? item.published ?? item.updated)
           : null,
         source: textOf(item?.source) || feedSource,
+        sourceUrl: extractSourceUrl(item) ?? undefined,
+        summary: summary || undefined,
+        snippet: summary || undefined,
       };
     })
     .filter((article) => {

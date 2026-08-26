@@ -1,6 +1,5 @@
 import { isValidHttpUrl } from "./dedup.js";
 import {
-  isSignificantLocalIncident,
   publicCategoryKey,
   standalonePublicationEligibility,
 } from "./editorial.js";
@@ -23,7 +22,7 @@ export async function verifyPrimarySource(
   const response = await fetchImpl(material.url, {
     method: "GET",
     redirect: "follow",
-    headers: { "user-agent": "WaterNewsEditor/0.3 source-verification" },
+    headers: { "user-agent": "WaterNewsEditor/0.7 source-verification" },
     signal: AbortSignal.timeout(15_000),
   });
   const resolvedUrl = response.url || material.url;
@@ -73,6 +72,17 @@ export function createAutoPublisher({
 
   function isInternationalMaterial(material) {
     return ["donor", "international_tech", "technology"].includes(publicCategoryKey(material));
+  }
+
+  function isLocalIncidentMaterial(material) {
+    const decision = material?.ai_decision ?? material?.aiDecision ?? {};
+    const explicitCategory =
+      decision.materialCategory ??
+      decision.sourceCategory ??
+      material?.sourceCategory ??
+      material?.source_category ??
+      null;
+    return explicitCategory === "local_media";
   }
 
   async function publishWithRetries(material) {
@@ -154,11 +164,11 @@ export function createAutoPublisher({
     const effectiveLimit = Math.min(maxDaily, editorialCap);
 
     while (publishedToday < effectiveLimit) {
-      const queue = await repository.getQueue(10);
+      const queue = await repository.getQueue(20);
       const material = queue.find((item) => {
         if (isInternationalMaterial(item) && internationalNow >= maxDailyInternational) return false;
-        if (!isSignificantLocalIncident(item)) return true;
-        return localIncidentsNow < maxLocalIncidents;
+        if (isLocalIncidentMaterial(item) && localIncidentsNow >= maxLocalIncidents) return false;
+        return true;
       });
       if (!material) break;
 
@@ -166,12 +176,12 @@ export function createAutoPublisher({
       if (outcome === "published") {
         publishedToday += 1;
         publishedNow += 1;
-        if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
+        if (isLocalIncidentMaterial(material)) localIncidentsNow += 1;
         if (isInternationalMaterial(material)) internationalNow += 1;
         if (publishedToday < effectiveLimit) await sleep(intervalMs);
       } else if (outcome === "dry_run") {
         simulatedNow += 1;
-        if (isSignificantLocalIncident(material)) localIncidentsNow += 1;
+        if (isLocalIncidentMaterial(material)) localIncidentsNow += 1;
         if (isInternationalMaterial(material)) internationalNow += 1;
         logger.info?.(`Publication outcome for #${material.id}: dry_run`);
       } else if (outcome === "digest_only") {
@@ -187,6 +197,7 @@ export function createAutoPublisher({
       configuredMaxDaily: maxDaily,
       editorialCap,
       maxDailyInternational,
+      maxLocalIncidents,
       digestOnlyNow,
       dryRun,
     };

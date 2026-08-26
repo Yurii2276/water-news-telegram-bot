@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyArticle, validateAiDecision } from "../src/ai.js";
+import {
+  classifyArticle,
+  MIN_AI_CONFIDENCE_SCORE,
+  MIN_AI_RELEVANCE_SCORE,
+  validateAiDecision,
+} from "../src/ai.js";
 
 const acceptedDecision = {
   relevant: true,
@@ -47,6 +52,8 @@ test("AI response is parsed from strict Responses API output", async () => {
   assert.deepEqual(result, acceptedDecision);
   assert.equal(request.text.format.type, "json_schema");
   assert.match(request.input[0].content, /ВИКЛЮЧНО/);
+  assert.match(request.input[0].content, /WASH/);
+  assert.match(request.input[0].content, /водн.*ресурс/);
 });
 
 test("low-confidence AI acceptance is converted to rejection", () => {
@@ -58,13 +65,23 @@ test("low-confidence AI acceptance is converted to rejection", () => {
   assert.match(result.rejectionReason, /довіри/);
 });
 
-test("AI acceptance below 85 percent relevance is rejected", () => {
+test("AI acceptance below corrected relevance threshold is rejected", () => {
   const result = validateAiDecision({
     ...acceptedDecision,
-    relevanceScore: 84,
+    relevanceScore: MIN_AI_RELEVANCE_SCORE - 1,
   });
   assert.equal(result.relevant, false);
   assert.match(result.rejectionReason, /Релевантність/);
+});
+
+test("medium-confidence water-sector article above 70 percent is accepted", () => {
+  const result = validateAiDecision({
+    ...acceptedDecision,
+    relevanceScore: Math.max(MIN_AI_RELEVANCE_SCORE, 78),
+    confidence: "medium",
+    confidenceScore: Math.max(MIN_AI_CONFIDENCE_SCORE, 76),
+  });
+  assert.equal(result.relevant, true);
 });
 
 test("article without source content is rejected without AI call", async () => {
