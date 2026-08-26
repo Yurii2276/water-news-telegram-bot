@@ -73,8 +73,12 @@ export const OFFICIAL_SOURCES = [
     id: "ukrvodokanal",
     category: "association",
     name: "Ukrainian water utilities association",
-    listingUrl: "https://ukrvodokanal.in.ua/",
+    // Important: scan the dated news archive, not the homepage. The homepage
+    // contains static navigation/category pages that previously flooded the queue.
+    listingUrl: "https://ukrvodokanal.in.ua/blog/",
     hosts: ["ukrvodokanal.in.ua"],
+    requirePublishedDate: true,
+    maxDirectItems: 8,
   },
   {
     id: "unicef_ukraine",
