@@ -81,12 +81,6 @@ async function repairDatabase() {
       )
   `);
 
-  // PR #23 deliberately broadened the editorial policy (70/70 AI threshold,
-  // wider water-sector scope and better extraction). Recent rejected_ai rows
-  // were created under the old narrow policy and would otherwise remain in the
-  // dedup pool forever, so rediscovered articles would be reported only as
-  // duplicates and could never reach the new classifier. Release those rows
-  // exactly once. New rejections created under the corrected policy are kept.
   const policyMigration = await repairPool.query(`
     INSERT INTO runtime_migrations(name)
     VALUES ('2026-08-26-release-pre-broad-policy-rejected-ai')
@@ -102,6 +96,28 @@ async function repairDatabase() {
         AND created_at >= NOW() - INTERVAL '14 days'
     `);
     releasedOldRejectedAi = released.rowCount;
+  }
+
+  // Earlier direct discovery scanned the association homepage. That page contains
+  // static category/navigation pages and old archive content with no publication
+  // date, which filled the queue and the channel. Drop only unpublished rows from
+  // that obsolete discovery path; the corrected /blog/ archive will rediscover
+  // genuinely fresh association news with a date.
+  const associationMigration = await repairPool.query(`
+    INSERT INTO runtime_migrations(name)
+    VALUES ('2026-08-26-reset-undated-ukrvodokanal-homepage-discovery')
+    ON CONFLICT (name) DO NOTHING
+    RETURNING name
+  `);
+  let removedAssociationBacklog = 0;
+  if (associationMigration.rowCount > 0) {
+    const removed = await repairPool.query(`
+      DELETE FROM materials
+      WHERE source_id = 'ukrvodokanal'
+        AND published_at IS NULL
+        AND discovery_method IN ('official', 'official_sitemap')
+    `);
+    removedAssociationBacklog = removed.rowCount;
   }
 
   const requeuedOldThreshold = await repairPool.query(`
@@ -173,6 +189,7 @@ async function repairDatabase() {
       `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
       `removed nonblocking dedup rows=${removedNonblockingRows.rowCount}`,
       `released old-policy AI rejects=${releasedOldRejectedAi}`,
+      `removed association homepage backlog=${removedAssociationBacklog}`,
       `requeued old-threshold AI news=${requeuedOldThreshold.rowCount}`,
       `requeued digest news=${requeuedDigest.rowCount}`,
     ].join(", "),
