@@ -1,14 +1,13 @@
 import { normalizeUrl } from "./dedup.js";
 import { discoverHighRecallSources } from "./highRecallDiscovery.js";
-import { parseNewsFeed } from "./news.js";
+import { createNewsSearchState, fetchNewsSearchLane } from "./newsSearchProvider.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/1.0; +https://github.com/Yurii2276/water-news-telegram-bot)";
-const GOOGLE_TRANSIENT = new Set([429, 502, 503, 504]);
 
 // Supplemental lanes are intentionally narrower than the four base queries.
 // Together they cover the editorial scope without returning to the old 20+
-// request burst that caused Google News 503 responses.
+// burst pattern. If Google News is unavailable, the shared provider state
+// switches the remaining lanes to Bing RSS for the rest of the scan.
 const SUPPLEMENTAL_FEEDS = [
   {
     id: "ua_water_resources",
@@ -60,15 +59,6 @@ const SUPPLEMENTAL_FEEDS = [
   },
 ];
 
-function googleNewsUrl(feed) {
-  const url = new URL("https://news.google.com/rss/search");
-  url.searchParams.set("q", feed.query);
-  url.searchParams.set("hl", feed.hl);
-  url.searchParams.set("gl", feed.gl);
-  url.searchParams.set("ceid", feed.ceid);
-  return url.toString();
-}
-
 function recentEnough(item, now, maxAgeDays) {
   if (!item?.publishedAt) return true;
   const timestamp = new Date(item.publishedAt).getTime();
@@ -81,9 +71,8 @@ function wait(ms) {
 
 function sanitizeDirectCandidate(candidate) {
   // Some DAVR listing templates wrap several neighbouring cards inside one <li>.
-  // That polluted a valid water-resources headline with unrelated obituary/DSNS
-  // text and made isNoiseOnly() reject the whole candidate before extraction.
-  // Keep the headline and let the article extractor fetch its own page instead.
+  // Keep only the headline before editorial noise checks and fetch the article page
+  // itself later in the extraction stage.
   if (candidate?.sourceId === "davr" && candidate?.discoveryMethod === "official") {
     return { ...candidate, summary: undefined, snippet: undefined };
   }
@@ -95,70 +84,73 @@ export async function discoverExpandedSources(options = {}) {
   const maxAgeDays = options.maxAgeDays ?? 7;
   const fetchImpl = options.fetchImpl ?? fetch;
   const logger = options.logger ?? console;
-  const rawBase = await discoverHighRecallSources(options);
+  const sleep = options.sleep ?? wait;
+  const newsSearchState = options.newsSearchState ?? createNewsSearchState();
+
+  const rawBase = await discoverHighRecallSources({
+    ...options,
+    now,
+    maxAgeDays,
+    fetchImpl,
+    logger,
+    sleep,
+    newsSearchState,
+  });
   const diagnostics = rawBase.diagnostics ?? {};
   const base = rawBase.map(sanitizeDirectCandidate);
 
-  diagnostics.supplemental_google_candidates = diagnostics.supplemental_google_candidates ?? 0;
-  diagnostics.supplemental_google_failures = diagnostics.supplemental_google_failures ?? 0;
-  diagnostics.supplemental_google_by_lane = diagnostics.supplemental_google_by_lane ?? {};
-  diagnostics.supplemental_google_circuit_opened = diagnostics.supplemental_google_circuit_opened ?? 0;
+  diagnostics.supplemental_search_candidates ??= 0;
+  diagnostics.supplemental_search_by_lane ??= {};
+  diagnostics.supplemental_google_candidates ??= 0;
+  diagnostics.supplemental_google_failures ??= 0;
+  diagnostics.supplemental_google_circuit_opened ??= 0;
 
   const seen = new Set(base.map((item) => normalizeUrl(item.url)).filter(Boolean));
 
   for (const [index, feed] of SUPPLEMENTAL_FEEDS.entries()) {
-    if (diagnostics.supplemental_google_circuit_opened) break;
-    if (index > 0) await wait(2300);
-    diagnostics.google_queries_executed = (diagnostics.google_queries_executed ?? 0) + 1;
-    try {
-      const url = googleNewsUrl(feed);
-      const response = await fetchImpl(url, {
-        headers: {
-          accept: "application/rss+xml,application/atom+xml,application/xml,text/xml",
-          "user-agent": USER_AGENT,
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) {
-        if (GOOGLE_TRANSIENT.has(response.status)) {
-          diagnostics.supplemental_google_failures += 1;
-          diagnostics.source_fetch_failures = (diagnostics.source_fetch_failures ?? 0) + 1;
-          diagnostics.transient_failures = (diagnostics.transient_failures ?? 0) + 1;
-          diagnostics.supplemental_google_circuit_opened = 1;
-          logger.warn?.(`Supplemental Google News circuit opened after HTTP ${response.status}`);
-          break;
-        }
-        throw new Error(`Supplemental Google News returned HTTP ${response.status}`);
-      }
+    if (index > 0) await sleep(2_300);
+    const beforeGoogleFailures = diagnostics.google_transient_failures ?? 0;
+    const items = await fetchNewsSearchLane({
+      lane: feed,
+      fetchImpl,
+      sleep,
+      diagnostics,
+      state: newsSearchState,
+      logger,
+      limit: 24,
+    });
 
-      const items = parseNewsFeed(await response.text(), 24);
-      let added = 0;
-      for (const item of items) {
-        if (!item?.url || !recentEnough(item, now, maxAgeDays)) continue;
-        const key = normalizeUrl(item.url);
-        if (key && seen.has(key)) continue;
-        if (key) seen.add(key);
-        base.push({
-          ...item,
-          sourceId: "google_news",
-          sourceName: item.source || "Google News discovery",
-          sourceCategory: feed.sourceCategory,
-          discoveryMethod: `google_news_${feed.id}`,
-          sectorQuery: feed.query,
-          discoveryLane: feed.id,
-        });
-        added += 1;
-      }
+    let added = 0;
+    for (const item of items) {
+      if (!item?.url || !recentEnough(item, now, maxAgeDays)) continue;
+      const key = normalizeUrl(item.url);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      base.push({
+        ...item,
+        sourceId: "google_news",
+        sourceName: item.source || "News search discovery",
+        sourceCategory: feed.sourceCategory,
+        discoveryMethod: item.searchProvider === "bing"
+          ? `google_news_bing_${feed.id}`
+          : `google_news_${feed.id}`,
+        sectorQuery: feed.query,
+        discoveryLane: feed.id,
+      });
+      added += 1;
+    }
+
+    diagnostics.supplemental_search_candidates += added;
+    diagnostics.supplemental_search_by_lane[feed.id] = added;
+    if (items.some((item) => item.searchProvider === "google")) {
       diagnostics.supplemental_google_candidates += added;
-      diagnostics.supplemental_google_by_lane[feed.id] = added;
-    } catch (error) {
+    }
+    if ((diagnostics.google_transient_failures ?? 0) > beforeGoogleFailures) {
       diagnostics.supplemental_google_failures += 1;
-      diagnostics.source_fetch_failures = (diagnostics.source_fetch_failures ?? 0) + 1;
-      logger.warn?.(`Supplemental discovery failed for ${feed.id}: ${error.message}`);
     }
   }
 
+  diagnostics.supplemental_google_circuit_opened = diagnostics.google_circuit_opened ?? 0;
   diagnostics.candidates_discovered = base.length;
   Object.defineProperty(base, "diagnostics", { value: diagnostics, enumerable: false });
   return base;
