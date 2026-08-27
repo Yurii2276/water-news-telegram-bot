@@ -75,8 +75,9 @@ test("high-recall Google discovery is capped at four queries per scan", () => {
   assert.match(queries[1], /тариф|якість води|відключення води/iu);
 });
 
-test("Google 503 opens a circuit instead of hammering all queries", async () => {
+test("Google 503 degrades to Bing and still executes all four coverage lanes", async () => {
   let googleCalls = 0;
+  let bingCalls = 0;
   const fetchImpl = async (url) => {
     if (String(url).includes("news.google.com")) {
       googleCalls += 1;
@@ -85,6 +86,15 @@ test("Google 503 opens a circuit instead of hammering all queries", async () => 
         status: 503,
         url,
         text: async () => "",
+      };
+    }
+    if (String(url).includes("bing.com/news/search")) {
+      bingCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: async () => `<?xml version="1.0"?><rss><channel><item><title>Водоканал модернізує мережу ${bingCalls}</title><link>https://example.com/water/${bingCalls}</link><pubDate>Thu, 27 Aug 2026 06:00:00 GMT</pubDate><description>Водоканал модернізує систему питного водопостачання та скорочує втрати води.</description><source url="https://example.com">Приклад</source></item></channel></rss>`,
       };
     }
     return {
@@ -106,9 +116,13 @@ test("Google 503 opens a circuit instead of hammering all queries", async () => 
     },
   });
 
-  assert.equal(googleCalls, 1);
+  assert.equal(googleCalls, 2);
   assert.equal(items.diagnostics.google_queries_executed, 1);
-  assert.equal(items.diagnostics.google_circuit_opened, 1);
+  assert.equal(items.diagnostics.google_degraded_mode, 1);
+  assert.equal(items.diagnostics.bing_queries_executed, 4);
+  assert.equal(items.diagnostics.bing_fallback_successes, 4);
+  assert.equal(bingCalls, 4);
+  assert.equal(items.length, 4);
 });
 
 test("RSS parser preserves useful summary text for fallback processing", () => {
