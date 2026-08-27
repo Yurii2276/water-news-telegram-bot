@@ -68,23 +68,42 @@ test("broad discovery policy keeps planned water-sector topics", () => {
   );
 });
 
-test("high-recall Google discovery is capped at four queries per scan", () => {
+test("high-recall Google discovery is capped at four base queries per scan", () => {
   const queries = selectedHighRecallQueries(new Date("2026-08-26T12:00:00Z"));
   assert.equal(queries.length, 4);
   assert.match(queries[0], /водоканал|водопостачання/iu);
   assert.match(queries[1], /тариф|якість води|відключення води/iu);
 });
 
-test("Google 503 opens a circuit instead of hammering all queries", async () => {
+test("Google 503 switches the remaining base lanes to Bing instead of aborting discovery", async () => {
   let googleCalls = 0;
+  let bingCalls = 0;
+  const bingRss = `<?xml version="1.0"?><rss><channel><item>
+    <title>Водоканал модернізує мережу водопостачання</title>
+    <link>https://example.com/fallback-water-news</link>
+    <pubDate>Thu, 27 Aug 2026 06:00:00 GMT</pubDate>
+    <description>Водоканал повідомив про модернізацію мережі водопостачання та скорочення втрат води.</description>
+    <source>Fallback News</source>
+  </item></channel></rss>`;
+
   const fetchImpl = async (url) => {
-    if (String(url).includes("news.google.com")) {
+    const value = String(url);
+    if (value.includes("news.google.com")) {
       googleCalls += 1;
       return {
         ok: false,
         status: 503,
         url,
         text: async () => "",
+      };
+    }
+    if (value.includes("bing.com/news/search")) {
+      bingCalls += 1;
+      return {
+        ok: true,
+        status: 200,
+        url,
+        text: async () => bingRss,
       };
     }
     return {
@@ -106,9 +125,12 @@ test("Google 503 opens a circuit instead of hammering all queries", async () => 
     },
   });
 
-  assert.equal(googleCalls, 1);
-  assert.equal(items.diagnostics.google_queries_executed, 1);
+  assert.equal(googleCalls, 2);
+  assert.equal(items.diagnostics.google_queries_executed, 4);
   assert.equal(items.diagnostics.google_circuit_opened, 1);
+  assert.equal(items.diagnostics.bing_fallback_queries, 4);
+  assert.equal(bingCalls, 4);
+  assert.ok(items.some((item) => item.searchProvider === "bing"));
 });
 
 test("RSS parser preserves useful summary text for fallback processing", () => {
