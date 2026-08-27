@@ -3,11 +3,11 @@ import * as cheerio from "cheerio";
 import { isBroadWaterSectorCandidate, isWaterNativeSource } from "./discoveryPolicy.js";
 import { normalizeUrl } from "./dedup.js";
 import { parseNewsFeed } from "./news.js";
+import { fetchNewsSearchItems } from "./newsSearchFallback.js";
 import { OFFICIAL_SOURCES, isGoogleNewsOnlySource } from "./sources.js";
 
-const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.8; +https://github.com/Yurii2276/water-news-telegram-bot)";
+const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/1.1; +https://github.com/Yurii2276/water-news-telegram-bot)";
 const TRANSIENT = new Set([429, 500, 502, 503, 504]);
-const GOOGLE_TRANSIENT = new Set([429, 502, 503, 504]);
 const DAY_MS = 24 * 60 * 60 * 1000;
 const GOOGLE_MIN_GAP_MS = 1_800;
 
@@ -290,49 +290,38 @@ async function discoverDirectSources({
 async function discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagnostics }) {
   const candidates = [];
   let lastRequestAt = 0;
+  let preferGoogle = diagnostics.google_degraded_mode !== 1;
 
   for (const query of selectedHighRecallQueries(now)) {
-    if (diagnostics.google_circuit_opened) break;
     const gap = Date.now() - lastRequestAt;
     if (lastRequestAt && gap < GOOGLE_MIN_GAP_MS) await sleep(GOOGLE_MIN_GAP_MS - gap);
-    const url = googleNewsUrl(query);
-    diagnostics.google_queries_executed += 1;
-    try {
-      lastRequestAt = Date.now();
-      const response = await fetchImpl(url, {
-        headers: {
-          accept: "application/rss+xml,application/atom+xml,application/xml,text/xml",
-          "user-agent": USER_AGENT,
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(15_000),
+    lastRequestAt = Date.now();
+
+    const result = await fetchNewsSearchItems({
+      query,
+      googleUrl: googleNewsUrl(query),
+      locale: "uk-UA",
+      country: "UA",
+      limit: Math.max(12, Math.ceil(limit / 2)),
+      fetchImpl,
+      sleep,
+      diagnostics,
+      logger,
+      preferGoogle,
+    });
+    if (result.backend === "bing") preferGoogle = false;
+
+    for (const item of result.items) {
+      candidates.push({
+        ...item,
+        url: item.url ?? item.link,
+        sourceId: "google_news",
+        sourceName: item.source || `${result.backend === "bing" ? "Bing" : "Google"} News discovery`,
+        sourceCategory: "general_news",
+        discoveryMethod: `news_search_${result.backend}`,
+        sectorQuery: query,
+        newsSearchBackend: result.backend,
       });
-      if (!response.ok) {
-        if (GOOGLE_TRANSIENT.has(response.status)) {
-          diagnostics.google_circuit_opened = 1;
-          diagnostics.source_fetch_failures += 1;
-          diagnostics.transient_failures += 1;
-          logger.warn?.(`Google News circuit opened after HTTP ${response.status}; remaining queries deferred to next scan`);
-          break;
-        }
-        throw fetchError(url, response.status);
-      }
-      const items = parseNewsFeed(await response.text(), Math.max(12, Math.ceil(limit / 2)));
-      for (const item of items) {
-        candidates.push({
-          ...item,
-          url: item.url ?? item.link,
-          sourceId: "google_news",
-          sourceName: item.source || "Google News discovery",
-          sourceCategory: "general_news",
-          discoveryMethod: "google_news_high_recall",
-          sectorQuery: query,
-        });
-      }
-    } catch (error) {
-      diagnostics.source_fetch_failures += 1;
-      diagnostics.transient_failures += TRANSIENT.has(error?.status) ? 1 : 0;
-      logger.warn?.(`Google News high-recall query failed: ${query}: ${error.message}`);
     }
   }
   return candidates;
@@ -353,7 +342,11 @@ export async function discoverHighRecallSources({
     source_fetch_failures: 0,
     transient_retries: 0,
     google_queries_executed: 0,
-    google_circuit_opened: 0,
+    google_failures: 0,
+    google_degraded_mode: 0,
+    bing_queries_executed: 0,
+    bing_fallback_successes: 0,
+    bing_failures: 0,
     direct_sources_attempted: 0,
     direct_sources_skipped_google_news_only: 0,
     direct_sources_skipped_cooldown: 0,
@@ -378,9 +371,9 @@ export async function discoverHighRecallSources({
   });
   const google = await discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagnostics });
 
-  // Google first is deliberate: the editor queues materials while scanning. Putting
-  // the four broad coverage lanes first prevents a single direct source from filling
-  // the publisher before regulation, donor and technology candidates are evaluated.
+  // News-search candidates first is deliberate: the editor queues materials while
+  // scanning. This prevents a single direct source from filling the publisher
+  // before regulation, donor and technology candidates are evaluated.
   pushUnique(merged, seen, google, now, maxAgeDays);
   pushUnique(merged, seen, direct, now, maxAgeDays);
 
