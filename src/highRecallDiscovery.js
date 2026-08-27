@@ -3,16 +3,16 @@ import * as cheerio from "cheerio";
 import { isBroadWaterSectorCandidate, isWaterNativeSource } from "./discoveryPolicy.js";
 import { normalizeUrl } from "./dedup.js";
 import { parseNewsFeed } from "./news.js";
+import { createNewsSearchState, fetchNewsSearchLane } from "./newsSearchProvider.js";
 import { OFFICIAL_SOURCES, isGoogleNewsOnlySource } from "./sources.js";
 
-const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.8; +https://github.com/Yurii2276/water-news-telegram-bot)";
+const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/1.1; +https://github.com/Yurii2276/water-news-telegram-bot)";
 const TRANSIENT = new Set([429, 500, 502, 503, 504]);
-const GOOGLE_TRANSIENT = new Set([429, 502, 503, 504]);
 const DAY_MS = 24 * 60 * 60 * 1000;
-const GOOGLE_MIN_GAP_MS = 1_800;
+const NEWS_SEARCH_GAP_MS = 1_800;
 
-// Four permanent coverage lanes. Every scan checks the full editorial scope
-// instead of rotating entire categories out of a scan.
+// Four permanent base lanes. Supplemental discovery adds water resources,
+// utilities, donor, cyber/OT and technology-specific coverage on top of these.
 export const COVERAGE_GOOGLE_QUERIES = [
   '(НКРЕКП OR Мінрозвитку OR "Кабінет Міністрів" OR "Верховна Рада") (водопостачання OR водовідведення OR водоканал OR "тариф на воду" OR "інвестиційна програма" OR "водна інфраструктура") when:5d',
   '(водоканал OR водопостачання OR водовідведення OR "питна вода" OR "якість води" OR "очисні споруди" OR "аварія на водогоні" OR "відключення води" OR "втрати води") Україна when:3d',
@@ -55,15 +55,6 @@ function isRecent(candidate, now, maxAgeDays) {
 
 export function selectedHighRecallQueries() {
   return [...COVERAGE_GOOGLE_QUERIES];
-}
-
-function googleNewsUrl(query) {
-  const url = new URL("https://news.google.com/rss/search");
-  url.searchParams.set("q", query);
-  url.searchParams.set("hl", "uk");
-  url.searchParams.set("gl", "UA");
-  url.searchParams.set("ceid", "UA:uk");
-  return url.toString();
 }
 
 function fetchError(url, status) {
@@ -287,54 +278,52 @@ async function discoverDirectSources({
   return candidates;
 }
 
-async function discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagnostics }) {
+async function discoverNewsSearch({
+  now,
+  limit,
+  fetchImpl,
+  sleep,
+  logger,
+  diagnostics,
+  newsSearchState,
+}) {
   const candidates = [];
-  let lastRequestAt = 0;
+  const queries = selectedHighRecallQueries(now);
 
-  for (const query of selectedHighRecallQueries(now)) {
-    if (diagnostics.google_circuit_opened) break;
-    const gap = Date.now() - lastRequestAt;
-    if (lastRequestAt && gap < GOOGLE_MIN_GAP_MS) await sleep(GOOGLE_MIN_GAP_MS - gap);
-    const url = googleNewsUrl(query);
-    diagnostics.google_queries_executed += 1;
-    try {
-      lastRequestAt = Date.now();
-      const response = await fetchImpl(url, {
-        headers: {
-          accept: "application/rss+xml,application/atom+xml,application/xml,text/xml",
-          "user-agent": USER_AGENT,
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(15_000),
+  for (const [index, query] of queries.entries()) {
+    if (index > 0) await sleep(NEWS_SEARCH_GAP_MS);
+    const items = await fetchNewsSearchLane({
+      lane: {
+        id: `base_${index + 1}`,
+        query,
+        hl: "uk",
+        gl: "UA",
+        ceid: "UA:uk",
+      },
+      fetchImpl,
+      sleep,
+      diagnostics,
+      state: newsSearchState,
+      logger,
+      limit: Math.max(12, Math.ceil(limit / 2)),
+    });
+
+    for (const item of items) {
+      candidates.push({
+        ...item,
+        url: item.url ?? item.link,
+        sourceId: "google_news",
+        sourceName: item.source || "News search discovery",
+        sourceCategory: "general_news",
+        discoveryMethod: item.searchProvider === "bing"
+          ? "google_news_bing_fallback"
+          : "google_news_high_recall",
+        sectorQuery: query,
+        discoveryLane: `base_${index + 1}`,
       });
-      if (!response.ok) {
-        if (GOOGLE_TRANSIENT.has(response.status)) {
-          diagnostics.google_circuit_opened = 1;
-          diagnostics.source_fetch_failures += 1;
-          diagnostics.transient_failures += 1;
-          logger.warn?.(`Google News circuit opened after HTTP ${response.status}; remaining queries deferred to next scan`);
-          break;
-        }
-        throw fetchError(url, response.status);
-      }
-      const items = parseNewsFeed(await response.text(), Math.max(12, Math.ceil(limit / 2)));
-      for (const item of items) {
-        candidates.push({
-          ...item,
-          url: item.url ?? item.link,
-          sourceId: "google_news",
-          sourceName: item.source || "Google News discovery",
-          sourceCategory: "general_news",
-          discoveryMethod: "google_news_high_recall",
-          sectorQuery: query,
-        });
-      }
-    } catch (error) {
-      diagnostics.source_fetch_failures += 1;
-      diagnostics.transient_failures += TRANSIENT.has(error?.status) ? 1 : 0;
-      logger.warn?.(`Google News high-recall query failed: ${query}: ${error.message}`);
     }
   }
+
   return candidates;
 }
 
@@ -348,12 +337,18 @@ export async function discoverHighRecallSources({
   sourceHealthStore = null,
   sourcePermanentFailureThreshold = 3,
   sourcePermanentFailureCooldownHours = 168,
+  newsSearchState = createNewsSearchState(),
 } = {}) {
   const diagnostics = {
     source_fetch_failures: 0,
     transient_retries: 0,
     google_queries_executed: 0,
     google_circuit_opened: 0,
+    google_rate_limited: 0,
+    google_transient_failures: 0,
+    bing_fallback_queries: 0,
+    news_search_fallback_successes: 0,
+    news_search_failures: 0,
     direct_sources_attempted: 0,
     direct_sources_skipped_google_news_only: 0,
     direct_sources_skipped_cooldown: 0,
@@ -376,12 +371,19 @@ export async function discoverHighRecallSources({
     sourcePermanentFailureCooldownHours,
     diagnostics,
   });
-  const google = await discoverGoogleNews({ now, limit, fetchImpl, sleep, logger, diagnostics });
+  const searched = await discoverNewsSearch({
+    now,
+    limit,
+    fetchImpl,
+    sleep,
+    logger,
+    diagnostics,
+    newsSearchState,
+  });
 
-  // Google first is deliberate: the editor queues materials while scanning. Putting
-  // the four broad coverage lanes first prevents a single direct source from filling
-  // the publisher before regulation, donor and technology candidates are evaluated.
-  pushUnique(merged, seen, google, now, maxAgeDays);
+  // Search coverage first is deliberate: the editor queues while scanning. Putting
+  // the broad lanes first prevents any one direct source from dominating the queue.
+  pushUnique(merged, seen, searched, now, maxAgeDays);
   pushUnique(merged, seen, direct, now, maxAgeDays);
 
   diagnostics.candidates_discovered = merged.length;
