@@ -117,14 +117,12 @@ async function fetchGoogle({ lane, fetchImpl, sleep, diagnostics, state, logger,
 
       if (!GOOGLE_TRANSIENT.has(response.status)) {
         diagnostics.news_search_failures += 1;
-        diagnostics.source_fetch_failures += 1;
-        logger.warn?.(`Google News search failed permanently for lane ${lane.id ?? "base"}: HTTP ${response.status}`);
+        logger.warn?.(`Google News search failed for lane ${lane.id ?? "base"}: HTTP ${response.status}; trying Bing fallback`);
         return null;
       }
 
       diagnostics.google_transient_failures += 1;
       diagnostics.transient_failures += 1;
-      diagnostics.source_fetch_failures += 1;
       state.googleTransientStreak += 1;
       if (response.status === 429) diagnostics.google_rate_limited += 1;
 
@@ -141,14 +139,12 @@ async function fetchGoogle({ lane, fetchImpl, sleep, diagnostics, state, logger,
     } catch (error) {
       if (!isTransientNetworkError(error)) {
         diagnostics.news_search_failures += 1;
-        diagnostics.source_fetch_failures += 1;
-        logger.warn?.(`Google News search failed for lane ${lane.id ?? "base"}: ${error.message}`);
+        logger.warn?.(`Google News search failed for lane ${lane.id ?? "base"}: ${error.message}; trying Bing fallback`);
         return null;
       }
 
       diagnostics.google_transient_failures += 1;
       diagnostics.transient_failures += 1;
-      diagnostics.source_fetch_failures += 1;
       state.googleTransientStreak += 1;
       if (attempt === 1) {
         diagnostics.transient_retries += 1;
