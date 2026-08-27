@@ -12,7 +12,10 @@ export function createNewsSearchState() {
 }
 
 function ensureDiagnostics(diagnostics) {
+  // Kept under the historical field name because /scan already renders it. It now
+  // means search coverage lanes attempted, irrespective of Google/Bing provider.
   diagnostics.google_queries_executed ??= 0;
+  diagnostics.google_http_requests ??= 0;
   diagnostics.bing_fallback_queries ??= 0;
   diagnostics.news_search_fallback_successes ??= 0;
   diagnostics.news_search_failures ??= 0;
@@ -88,7 +91,7 @@ function normalizeProviderItems(items, provider) {
 }
 
 async function requestFeed(url, { fetchImpl, timeoutMs = 16_000 } = {}) {
-  const response = await fetchImpl(url, {
+  return fetchImpl(url, {
     headers: {
       accept: "application/rss+xml,application/atom+xml,application/xml,text/xml",
       "accept-language": "uk-UA,uk;q=0.9,en;q=0.8",
@@ -97,7 +100,6 @@ async function requestFeed(url, { fetchImpl, timeoutMs = 16_000 } = {}) {
     redirect: "follow",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  return response;
 }
 
 async function fetchGoogle({ lane, fetchImpl, sleep, diagnostics, state, logger, limit }) {
@@ -105,7 +107,7 @@ async function fetchGoogle({ lane, fetchImpl, sleep, diagnostics, state, logger,
   const url = googleNewsUrl(lane);
 
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    diagnostics.google_queries_executed += 1;
+    diagnostics.google_http_requests += 1;
     try {
       const response = await requestFeed(url, { fetchImpl });
       if (response.ok) {
@@ -195,6 +197,7 @@ export async function fetchNewsSearchLane({
   limit = 24,
 } = {}) {
   ensureDiagnostics(diagnostics);
+  diagnostics.google_queries_executed += 1;
 
   const googleItems = await fetchGoogle({
     lane,
