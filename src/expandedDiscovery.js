@@ -1,14 +1,12 @@
 import { normalizeUrl } from "./dedup.js";
 import { discoverHighRecallSources } from "./highRecallDiscovery.js";
-import { parseNewsFeed } from "./news.js";
+import { fetchNewsSearchItems } from "./newsSearchFallback.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
-const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/1.0; +https://github.com/Yurii2276/water-news-telegram-bot)";
-const GOOGLE_TRANSIENT = new Set([429, 502, 503, 504]);
 
 // Supplemental lanes are intentionally narrower than the four base queries.
 // Together they cover the editorial scope without returning to the old 20+
-// request burst that caused Google News 503 responses.
+// Google-only request burst that caused 503 responses.
 const SUPPLEMENTAL_FEEDS = [
   {
     id: "ua_water_resources",
@@ -16,6 +14,8 @@ const SUPPLEMENTAL_FEEDS = [
     hl: "uk",
     gl: "UA",
     ceid: "UA:uk",
+    locale: "uk-UA",
+    country: "UA",
     sourceCategory: "government",
   },
   {
@@ -24,6 +24,8 @@ const SUPPLEMENTAL_FEEDS = [
     hl: "uk",
     gl: "UA",
     ceid: "UA:uk",
+    locale: "uk-UA",
+    country: "UA",
     sourceCategory: "vodokanal",
   },
   {
@@ -32,6 +34,8 @@ const SUPPLEMENTAL_FEEDS = [
     hl: "en-US",
     gl: "US",
     ceid: "US:en",
+    locale: "en-US",
+    country: "US",
     sourceCategory: "donor",
   },
   {
@@ -40,6 +44,8 @@ const SUPPLEMENTAL_FEEDS = [
     hl: "en-US",
     gl: "US",
     ceid: "US:en",
+    locale: "en-US",
+    country: "US",
     sourceCategory: "international_tech",
   },
   {
@@ -48,6 +54,8 @@ const SUPPLEMENTAL_FEEDS = [
     hl: "en-US",
     gl: "US",
     ceid: "US:en",
+    locale: "en-US",
+    country: "US",
     sourceCategory: "international_tech",
   },
   {
@@ -56,6 +64,8 @@ const SUPPLEMENTAL_FEEDS = [
     hl: "en-US",
     gl: "US",
     ceid: "US:en",
+    locale: "en-US",
+    country: "US",
     sourceCategory: "international_tech",
   },
 ];
@@ -81,9 +91,7 @@ function wait(ms) {
 
 function sanitizeDirectCandidate(candidate) {
   // Some DAVR listing templates wrap several neighbouring cards inside one <li>.
-  // That polluted a valid water-resources headline with unrelated obituary/DSNS
-  // text and made isNoiseOnly() reject the whole candidate before extraction.
-  // Keep the headline and let the article extractor fetch its own page instead.
+  // Keep the headline and let the article extractor fetch the actual article page.
   if (candidate?.sourceId === "davr" && candidate?.discoveryMethod === "official") {
     return { ...candidate, summary: undefined, snippet: undefined };
   }
@@ -102,61 +110,52 @@ export async function discoverExpandedSources(options = {}) {
   diagnostics.supplemental_google_candidates = diagnostics.supplemental_google_candidates ?? 0;
   diagnostics.supplemental_google_failures = diagnostics.supplemental_google_failures ?? 0;
   diagnostics.supplemental_google_by_lane = diagnostics.supplemental_google_by_lane ?? {};
-  diagnostics.supplemental_google_circuit_opened = diagnostics.supplemental_google_circuit_opened ?? 0;
 
   const seen = new Set(base.map((item) => normalizeUrl(item.url)).filter(Boolean));
+  let preferGoogle = diagnostics.google_degraded_mode !== 1;
 
   for (const [index, feed] of SUPPLEMENTAL_FEEDS.entries()) {
-    if (diagnostics.supplemental_google_circuit_opened) break;
-    if (index > 0) await wait(2300);
-    diagnostics.google_queries_executed = (diagnostics.google_queries_executed ?? 0) + 1;
-    try {
-      const url = googleNewsUrl(feed);
-      const response = await fetchImpl(url, {
-        headers: {
-          accept: "application/rss+xml,application/atom+xml,application/xml,text/xml",
-          "user-agent": USER_AGENT,
-        },
-        redirect: "follow",
-        signal: AbortSignal.timeout(15_000),
-      });
-      if (!response.ok) {
-        if (GOOGLE_TRANSIENT.has(response.status)) {
-          diagnostics.supplemental_google_failures += 1;
-          diagnostics.source_fetch_failures = (diagnostics.source_fetch_failures ?? 0) + 1;
-          diagnostics.transient_failures = (diagnostics.transient_failures ?? 0) + 1;
-          diagnostics.supplemental_google_circuit_opened = 1;
-          logger.warn?.(`Supplemental Google News circuit opened after HTTP ${response.status}`);
-          break;
-        }
-        throw new Error(`Supplemental Google News returned HTTP ${response.status}`);
-      }
+    if (index > 0) await wait(2_300);
 
-      const items = parseNewsFeed(await response.text(), 24);
-      let added = 0;
-      for (const item of items) {
-        if (!item?.url || !recentEnough(item, now, maxAgeDays)) continue;
-        const key = normalizeUrl(item.url);
-        if (key && seen.has(key)) continue;
-        if (key) seen.add(key);
-        base.push({
-          ...item,
-          sourceId: "google_news",
-          sourceName: item.source || "Google News discovery",
-          sourceCategory: feed.sourceCategory,
-          discoveryMethod: `google_news_${feed.id}`,
-          sectorQuery: feed.query,
-          discoveryLane: feed.id,
-        });
-        added += 1;
-      }
-      diagnostics.supplemental_google_candidates += added;
-      diagnostics.supplemental_google_by_lane[feed.id] = added;
-    } catch (error) {
+    const result = await fetchNewsSearchItems({
+      query: feed.query,
+      googleUrl: googleNewsUrl(feed),
+      locale: feed.locale,
+      country: feed.country,
+      limit: 24,
+      fetchImpl,
+      sleep: options.sleep,
+      diagnostics,
+      logger,
+      preferGoogle,
+    });
+    if (result.backend === "bing") preferGoogle = false;
+    if (result.backend === "failed") {
       diagnostics.supplemental_google_failures += 1;
-      diagnostics.source_fetch_failures = (diagnostics.source_fetch_failures ?? 0) + 1;
-      logger.warn?.(`Supplemental discovery failed for ${feed.id}: ${error.message}`);
+      diagnostics.supplemental_google_by_lane[feed.id] = 0;
+      continue;
     }
+
+    let added = 0;
+    for (const item of result.items) {
+      if (!item?.url || !recentEnough(item, now, maxAgeDays)) continue;
+      const key = normalizeUrl(item.url);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      base.push({
+        ...item,
+        sourceId: "google_news",
+        sourceName: item.source || `${result.backend === "bing" ? "Bing" : "Google"} News discovery`,
+        sourceCategory: feed.sourceCategory,
+        discoveryMethod: `news_search_${feed.id}_${result.backend}`,
+        sectorQuery: feed.query,
+        discoveryLane: feed.id,
+        newsSearchBackend: result.backend,
+      });
+      added += 1;
+    }
+    diagnostics.supplemental_google_candidates += added;
+    diagnostics.supplemental_google_by_lane[feed.id] = added;
   }
 
   diagnostics.candidates_discovered = base.length;
