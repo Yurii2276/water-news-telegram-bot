@@ -98,6 +98,40 @@ async function repairDatabase() {
     releasedOldRejectedAi = released.rowCount;
   }
 
+  // The search-provider fixes can suddenly rediscover a much wider set of fresh
+  // stories. Rows that were rejected or demoted while discovery/extraction was
+  // still broken must not permanently mask those stories as database duplicates.
+  // Release only recent unpublished blockers; published material is never touched.
+  const freshDedupMigration = await repairPool.query(`
+    INSERT INTO runtime_migrations(name)
+    VALUES ('2026-08-27-release-fresh-unpublished-dedup-blockers-v1')
+    ON CONFLICT (name) DO NOTHING
+    RETURNING name
+  `);
+  let releasedFreshDedupBlockers = 0;
+  if (freshDedupMigration.rowCount > 0) {
+    const released = await repairPool.query(`
+      DELETE FROM materials
+      WHERE published_at IS NULL
+        AND created_at >= NOW() - INTERVAL '72 hours'
+        AND (
+          status = 'rejected_ai'
+          OR (
+            status = 'digest_only'
+            AND status_reason IN (
+              'insufficient_public_context',
+              'generated_description_too_short',
+              'invalid_sentence_count',
+              'public_description_validation_failed',
+              'insufficient_compact_public_context',
+              'title_only'
+            )
+          )
+        )
+    `);
+    releasedFreshDedupBlockers = released.rowCount;
+  }
+
   // Earlier direct discovery scanned the association homepage. That page contains
   // static category/navigation pages and old archive content with no publication
   // date, which filled the queue and the channel. Drop only unpublished rows from
@@ -189,6 +223,7 @@ async function repairDatabase() {
       `Runtime repair complete: normalized stale digest rows=${normalized.rowCount}`,
       `removed nonblocking dedup rows=${removedNonblockingRows.rowCount}`,
       `released old-policy AI rejects=${releasedOldRejectedAi}`,
+      `released fresh unpublished dedup blockers=${releasedFreshDedupBlockers}`,
       `removed association homepage backlog=${removedAssociationBacklog}`,
       `requeued old-threshold AI news=${requeuedOldThreshold.rowCount}`,
       `requeued digest news=${requeuedDigest.rowCount}`,
