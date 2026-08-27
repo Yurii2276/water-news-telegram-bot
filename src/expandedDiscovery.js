@@ -1,0 +1,111 @@
+import { normalizeUrl } from "./dedup.js";
+import { discoverHighRecallSources } from "./highRecallDiscovery.js";
+import { parseNewsFeed } from "./news.js";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const USER_AGENT = "Mozilla/5.0 (compatible; WaterNewsEditor/0.9; +https://github.com/Yurii2276/water-news-telegram-bot)";
+
+const SUPPLEMENTAL_FEEDS = [
+  {
+    id: "ua_water_resources",
+    query: '(Держводагентство OR "водні ресурси" OR водокористування OR "водність річок" OR "забруднення вод" OR "водна безпека") Україна when:5d',
+    hl: "uk",
+    gl: "UA",
+    ceid: "UA:uk",
+    sourceCategory: "government",
+  },
+  {
+    id: "international_donors",
+    query: '(Ukraine OR Ukrainian) (water OR wastewater OR WASH OR "water infrastructure") (World Bank OR EBRD OR EIB OR UNICEF OR UNDP OR "European Union" OR grant OR financing OR reconstruction) when:7d',
+    hl: "en-US",
+    gl: "US",
+    ceid: "US:en",
+    sourceCategory: "donor",
+  },
+  {
+    id: "international_technology",
+    query: '("water utility" OR "water utilities" OR wastewater OR "drinking water") ("smart water" OR "digital water" OR "non-revenue water" OR "leak detection" OR "smart metering" OR "digital twin" OR AI OR SCADA OR "membrane bioreactor" OR "wastewater reuse" OR desalination) when:7d',
+    hl: "en-US",
+    gl: "US",
+    ceid: "US:en",
+    sourceCategory: "international_tech",
+  },
+];
+
+function googleNewsUrl(feed) {
+  const url = new URL("https://news.google.com/rss/search");
+  url.searchParams.set("q", feed.query);
+  url.searchParams.set("hl", feed.hl);
+  url.searchParams.set("gl", feed.gl);
+  url.searchParams.set("ceid", feed.ceid);
+  return url.toString();
+}
+
+function recentEnough(item, now, maxAgeDays) {
+  if (!item?.publishedAt) return true;
+  const timestamp = new Date(item.publishedAt).getTime();
+  return Number.isFinite(timestamp) && timestamp >= now.getTime() - maxAgeDays * DAY_MS;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function discoverExpandedSources(options = {}) {
+  const now = options.now ?? new Date();
+  const maxAgeDays = options.maxAgeDays ?? 7;
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const logger = options.logger ?? console;
+  const base = await discoverHighRecallSources(options);
+  const diagnostics = base.diagnostics ?? {};
+  diagnostics.supplemental_google_candidates = diagnostics.supplemental_google_candidates ?? 0;
+  diagnostics.supplemental_google_failures = diagnostics.supplemental_google_failures ?? 0;
+  diagnostics.supplemental_google_by_lane = diagnostics.supplemental_google_by_lane ?? {};
+
+  const seen = new Set(base.map((item) => normalizeUrl(item.url)).filter(Boolean));
+
+  for (const [index, feed] of SUPPLEMENTAL_FEEDS.entries()) {
+    if (index > 0) await wait(2200);
+    diagnostics.google_queries_executed = (diagnostics.google_queries_executed ?? 0) + 1;
+    try {
+      const url = googleNewsUrl(feed);
+      const response = await fetchImpl(url, {
+        headers: {
+          accept: "application/rss+xml,application/atom+xml,application/xml,text/xml",
+          "user-agent": USER_AGENT,
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15_000),
+      });
+      if (!response.ok) throw new Error(`Supplemental Google News returned HTTP ${response.status}`);
+
+      const items = parseNewsFeed(await response.text(), 30);
+      let added = 0;
+      for (const item of items) {
+        if (!item?.url || !recentEnough(item, now, maxAgeDays)) continue;
+        const key = normalizeUrl(item.url);
+        if (key && seen.has(key)) continue;
+        if (key) seen.add(key);
+        base.push({
+          ...item,
+          sourceId: "google_news",
+          sourceName: item.source || "Google News discovery",
+          sourceCategory: feed.sourceCategory,
+          discoveryMethod: `google_news_${feed.id}`,
+          sectorQuery: feed.query,
+          discoveryLane: feed.id,
+        });
+        added += 1;
+      }
+      diagnostics.supplemental_google_candidates += added;
+      diagnostics.supplemental_google_by_lane[feed.id] = added;
+    } catch (error) {
+      diagnostics.supplemental_google_failures += 1;
+      diagnostics.source_fetch_failures = (diagnostics.source_fetch_failures ?? 0) + 1;
+      logger.warn?.(`Supplemental discovery failed for ${feed.id}: ${error.message}`);
+    }
+  }
+
+  diagnostics.candidates_discovered = base.length;
+  return base;
+}

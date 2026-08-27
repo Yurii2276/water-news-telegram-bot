@@ -1,6 +1,6 @@
 import { createUpdateHandler, runPolling, sendDailyDigest } from "./bot.js";
 import { classifyArticle } from "./ai.js";
-import { discoverHighRecallSources } from "./highRecallDiscovery.js";
+import { discoverExpandedSources } from "./expandedDiscovery.js";
 import { extractHighRecallArticle } from "./highRecallExtractor.js";
 import { getConfig, loadEnvironmentFile } from "./config.js";
 import { createDatabase } from "./db.js";
@@ -53,7 +53,7 @@ const publisher = createAutoPublisher({
 
 const pipeline = createEditorPipeline({
   discover: () =>
-    discoverHighRecallSources({
+    discoverExpandedSources({
       limit: Math.max(config.newsLimit, 30),
       sourceHealthStore: repository,
       sourcePermanentFailureThreshold: config.sourcePermanentFailureThreshold,
