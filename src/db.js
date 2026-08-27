@@ -81,7 +81,13 @@ export function createDatabase(databaseUrl) {
 
     async listForDedup(limit = 1000) {
       const { rows } = await pool.query(
-        `SELECT id, url, title, content, story_key FROM materials ORDER BY id DESC LIMIT $1`,
+        `SELECT id, url, title, content, story_key, status, published_at, created_at, updated_at
+         FROM materials
+         WHERE status IN ('published', 'queued', 'dry_run')
+            OR (status = 'digest_only' AND updated_at >= NOW() - INTERVAL '6 hours')
+            OR (status = 'rejected_ai' AND updated_at >= NOW() - INTERVAL '24 hours')
+         ORDER BY id DESC
+         LIMIT $1`,
         [limit],
       );
       return rows;
@@ -98,13 +104,76 @@ export function createDatabase(databaseUrl) {
            source_quality, context_basis, professional_context_uk, public_description_uk
          ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
          ON CONFLICT (normalized_url) DO UPDATE SET
-           updated_at = NOW(),
-           status_reason = EXCLUDED.status_reason,
-           story_key = COALESCE(materials.story_key, EXCLUDED.story_key),
-           source_quality = COALESCE(materials.source_quality, EXCLUDED.source_quality),
-           context_basis = COALESCE(materials.context_basis, EXCLUDED.context_basis),
-           professional_context_uk = COALESCE(materials.professional_context_uk, EXCLUDED.professional_context_uk),
-           public_description_uk = COALESCE(materials.public_description_uk, EXCLUDED.public_description_uk)
+           source_id = CASE WHEN materials.published_at IS NULL THEN EXCLUDED.source_id ELSE materials.source_id END,
+           source_name = CASE WHEN materials.published_at IS NULL THEN EXCLUDED.source_name ELSE materials.source_name END,
+           discovery_method = CASE WHEN materials.published_at IS NULL THEN EXCLUDED.discovery_method ELSE materials.discovery_method END,
+           title = CASE WHEN materials.published_at IS NULL THEN EXCLUDED.title ELSE materials.title END,
+           normalized_title = CASE WHEN materials.published_at IS NULL THEN EXCLUDED.normalized_title ELSE materials.normalized_title END,
+           content = CASE
+             WHEN materials.published_at IS NULL AND length(EXCLUDED.content) > length(materials.content)
+               THEN EXCLUDED.content
+             ELSE materials.content
+           END,
+           content_hash = CASE
+             WHEN materials.published_at IS NULL AND length(EXCLUDED.content) > length(materials.content)
+               THEN EXCLUDED.content_hash
+             ELSE materials.content_hash
+           END,
+           status = CASE
+             WHEN materials.published_at IS NOT NULL OR materials.status = 'published' THEN materials.status
+             WHEN materials.status = 'queued' AND EXCLUDED.status <> 'published' THEN materials.status
+             WHEN EXCLUDED.status = 'queued' THEN 'queued'
+             ELSE EXCLUDED.status
+           END,
+           status_reason = CASE
+             WHEN materials.published_at IS NOT NULL OR materials.status = 'published' THEN materials.status_reason
+             WHEN materials.status = 'queued' AND EXCLUDED.status <> 'published' THEN materials.status_reason
+             ELSE EXCLUDED.status_reason
+           END,
+           preliminary_categories = CASE
+             WHEN materials.published_at IS NULL THEN EXCLUDED.preliminary_categories
+             ELSE materials.preliminary_categories
+           END,
+           ai_decision = CASE
+             WHEN materials.published_at IS NULL AND EXCLUDED.ai_decision IS NOT NULL THEN EXCLUDED.ai_decision
+             ELSE materials.ai_decision
+           END,
+           story_key = CASE
+             WHEN materials.published_at IS NULL THEN COALESCE(EXCLUDED.story_key, materials.story_key)
+             ELSE materials.story_key
+           END,
+           source_quality = CASE
+             WHEN materials.published_at IS NULL THEN COALESCE(EXCLUDED.source_quality, materials.source_quality)
+             ELSE materials.source_quality
+           END,
+           context_basis = CASE
+             WHEN materials.published_at IS NULL THEN COALESCE(EXCLUDED.context_basis, materials.context_basis)
+             ELSE materials.context_basis
+           END,
+           professional_context_uk = CASE
+             WHEN materials.published_at IS NULL THEN COALESCE(EXCLUDED.professional_context_uk, materials.professional_context_uk)
+             ELSE materials.professional_context_uk
+           END,
+           public_description_uk = CASE
+             WHEN materials.published_at IS NULL AND EXCLUDED.status = 'queued' THEN EXCLUDED.public_description_uk
+             ELSE COALESCE(materials.public_description_uk, EXCLUDED.public_description_uk)
+           END,
+           publish_attempts = CASE
+             WHEN materials.published_at IS NULL AND EXCLUDED.status = 'queued' THEN 0
+             ELSE materials.publish_attempts
+           END,
+           last_publish_error = CASE
+             WHEN materials.published_at IS NULL AND EXCLUDED.status = 'queued' THEN NULL
+             ELSE materials.last_publish_error
+           END,
+           next_publish_at = CASE
+             WHEN materials.published_at IS NULL AND EXCLUDED.status = 'queued' THEN NULL
+             ELSE materials.next_publish_at
+           END,
+           updated_at = CASE
+             WHEN materials.published_at IS NOT NULL OR materials.status = 'published' THEN materials.updated_at
+             ELSE NOW()
+           END
          RETURNING *`,
         [
           material.sourceId,
@@ -253,8 +322,13 @@ export function createDatabase(databaseUrl) {
     async getDailyDigestMaterials() {
       const { rows } = await pool.query(
         `SELECT * FROM materials
-         WHERE status IN ('published', 'queued', 'dry_run', 'digest_only')
-           AND updated_at >= NOW() - INTERVAL '24 hours'
+         WHERE (
+           status = 'published'
+           AND published_at >= NOW() - INTERVAL '24 hours'
+         ) OR (
+           status IN ('queued', 'dry_run', 'digest_only')
+           AND created_at >= NOW() - INTERVAL '24 hours'
+         )
          ORDER BY
            CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
            CASE COALESCE(ai_decision->>'materialCategory', ai_decision->>'sourceCategory')
@@ -276,7 +350,7 @@ export function createDatabase(databaseUrl) {
              ELSE 1
            END,
            (ai_decision->>'priorityScore')::int DESC NULLS LAST,
-           updated_at DESC
+           COALESCE(published_at, created_at) DESC
          LIMIT 60`,
       );
       return rows;
@@ -285,8 +359,13 @@ export function createDatabase(databaseUrl) {
     async getWeeklyAnalysisMaterials() {
       const { rows } = await pool.query(
         `SELECT * FROM materials
-         WHERE status IN ('published', 'queued', 'dry_run', 'digest_only')
-           AND updated_at >= NOW() - INTERVAL '7 days'
+         WHERE (
+           status = 'published'
+           AND published_at >= NOW() - INTERVAL '7 days'
+         ) OR (
+           status IN ('queued', 'dry_run', 'digest_only')
+           AND created_at >= NOW() - INTERVAL '7 days'
+         )
          ORDER BY
            CASE WHEN ai_decision->>'normativeAct' = 'true' OR ai_decision->>'normative_act' = 'true' THEN 0 ELSE 1 END,
            CASE COALESCE(ai_decision->>'materialCategory', ai_decision->>'sourceCategory')
@@ -303,7 +382,7 @@ export function createDatabase(databaseUrl) {
              ELSE 9
            END,
            (ai_decision->>'priorityScore')::int DESC NULLS LAST,
-           updated_at DESC
+           COALESCE(published_at, created_at) DESC
          LIMIT 120`,
       );
       return rows;
